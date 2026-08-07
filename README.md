@@ -4,6 +4,5 @@ Principal Investigators: _Nick J Lyon, Li Kui, Nate Emery, Sarah Elmendorf, Stev
 
 ## Script Explanations
 
-Briefly describe the purpose of major scripts as you create them!
-
-- 
+- `01_tidy.r` -- Tidy Qualtrics survey data for ease of later analysis/visualization
+- `02_viz-single-qs.r` -- Visualize each categorical question (by itself)
