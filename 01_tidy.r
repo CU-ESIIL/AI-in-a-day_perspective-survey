@@ -3,7 +3,7 @@
 ## -------------------------------------------- ##
 # Purpose
 ## Get the data into tidy format for analysis/visualization
-## !!! NOTE: raw survey data are stored in a Box folder only IRB-approved group members have access to !!!
+## !!! Raw survey data are stored in a Box folder only IRB-approved group members can access !!!
 ## !!! You must _manually_ download that file and place it in a local "data" folder in this project's folder !!!
 
 # Load libraries
@@ -11,7 +11,7 @@
 librarian::shelf(tidyverse, psych, supportR)
 
 # Get set up
-source(file.path("scripts", "survey", "-setup.r"))
+source(file.path("-setup.r"))
 
 # Clear environment/collect garbage
 rm(list = ls()); gc()
@@ -93,8 +93,8 @@ dplyr::glimpse(svy_v01)
 ## -------------------------------------------- ##
 
 # Check Captcha scores & survey duration to identify likely bots
-psych::multi.hist(as.numeric(svy_v01$Q_RecaptchaScore))
-psych::multi.hist(as.numeric(svy_v01$Duration..in.seconds.))
+# psych::multi.hist(as.numeric(svy_v01$Q_RecaptchaScore))
+# psych::multi.hist(as.numeric(svy_v01$Duration..in.seconds.))
 
 # Remove response metadata, empty columns, and preview/non-consenting/bot rows
 svy_v02 <- svy_v01 %>% 
@@ -144,10 +144,10 @@ dplyr::glimpse(svy_v99)
 
 # Export locally
 write.csv(x = svy_v99, row.names = FALSE, na = '',
-  file = file.path("data", "survey-01_tidied.csv"))
+  file = file.path("data", "01_tidied-responses.csv"))
 
 # Export question lookup
 write.csv(x = lookup, row.names = FALSE, na = '',
-  file = file.path("data", "question-lookup-table.csv"))
+  file = file.path("data", "01_question-lookup-table.csv"))
 
 # End ----
