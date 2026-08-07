@@ -6,7 +6,7 @@ Each script in this folder contains a function (of the same name as the file) th
 
 ```
 # Load all custom functions
-purrr::walk(.x = dir(path = file.path("scripts", "tools"), 
+purrr::walk(.x = dir(path = file.path("tools"), 
     pattern = "*.r", full.names = TRUE),
   .f = ~ source(file = .x))
 ```
