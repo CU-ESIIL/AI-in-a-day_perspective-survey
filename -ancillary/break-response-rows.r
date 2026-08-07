@@ -9,17 +9,18 @@
 librarian::shelf(tidyverse, supportR, googledrive)
 
 # Get set up
-source(file.path("scripts", "survey", "-setup.r"))
+source(file.path("-setup.r"))
 
 # Clear environment/collect garbage
 rm(list = ls()); gc()
 
 # Load any custom functions
-purrr::walk(.x = dir(path = file.path("scripts", "tools"), pattern = "*.r", full.names = TRUE),
+purrr::walk(.x = dir(path = file.path("tools"), 
+    pattern = "*.r", full.names = TRUE),
   .f = ~ source(file = .x))
 
 # Read in data
-fake_v01 <- read.csv(file.path("data", "survey-01_tidied.csv")) %>% 
+fake_v01 <- read.csv(file.path("data", "01_tidied-responses.csv")) %>% 
   dplyr::mutate(dplyr::across(.cols = dplyr::everything(),
     .fns = ~ ifelse(nchar(.) == 0, yes = NA, no = .)))
 
@@ -75,8 +76,11 @@ fake_v99 <- fake_v03
 # Check structure
 dplyr::glimpse(fake_v99)
 
+# Break off year/month of current date
+(stamp <- stringr::str_sub(Sys.Date(), start = 1, end = 7))
+
 # Define output filename
-fake_name <- "fake-survey-data_2026-08.csv"
+fake_name <- paste0("fake-survey-data_", stamp, ".csv")
 
 # Export locally
 write.csv(x = fake_v99, row.names = FALSE, na = "",
