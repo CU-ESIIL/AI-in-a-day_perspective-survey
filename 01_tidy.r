@@ -21,8 +21,8 @@ rm(list = ls()); gc()
 ## -------------------------------------------- ##
 
 # Define data names (for easy future updating)
-labs_file <- "AI in a Day - Perspectives Survey_August 6, 2026_Labels.csv"
-vals_file <- "AI in a Day - Perspectives Survey_August 6, 2026_Values.csv"
+labs_file <- "AI in a Day - Perspectives Survey_August 18, 2026_Labels.csv"
+vals_file <- "AI in a Day - Perspectives Survey_August 18, 2026_Values.csv"
 
 # Read in the data where response labels are retained
 labs_v01 <- read.csv(file.path("data", labs_file))
@@ -99,7 +99,6 @@ dplyr::glimpse(svy_v01)
 # Remove response metadata, empty columns, and preview/non-consenting/bot rows
 svy_v02 <- svy_v01 %>% 
   dplyr::filter(DistributionChannel != "preview") %>% 
-  dplyr::filter(ConsentQ == "Yes") %>% 
   dplyr::filter(Q_RecaptchaScore > 0) %>% # PLACEHOLDER!
   dplyr::filter(Duration..in.seconds. > 0) %>% # PLACEHOLDER!
   dplyr::relocate(ResponseId, .before = dplyr::everything()) %>% 
