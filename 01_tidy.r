@@ -99,6 +99,7 @@ dplyr::glimpse(svy_v01)
 # Remove response metadata, empty columns, and preview/non-consenting/bot rows
 svy_v02 <- svy_v01 %>% 
   dplyr::filter(DistributionChannel != "preview") %>% 
+  dplyr::filter(ConsentQ == "Yes") %>% 
   dplyr::filter(Q_RecaptchaScore > 0) %>% # PLACEHOLDER!
   dplyr::filter(Duration..in.seconds. > 0) %>% # PLACEHOLDER!
   dplyr::relocate(ResponseId, .before = dplyr::everything()) %>% 
