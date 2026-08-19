@@ -231,21 +231,17 @@ attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
   "Other" = "#343a40")
 
 # Actually make graph
-svy_v01 %>% 
-  dplyr::mutate(Gen_Attitude = dplyr::case_when(
-    Gen_Attitude == "Other (please specify)" ~ "Other",
-    TRUE ~ Gen_Attitude)) %>%
-  graph_select_one(df = ., q = "Gen_Attitude") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
-    scale_fill_manual(values = attitude_cols) +
-    labs(x = "", y = "Percent Responses (%)",
-      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 70)) +
-    supportR::theme_lyon(title_size = 20, text_size = 16) +
-    theme(axis.text.x = element_blank(),
-      axis.title.x = element_blank(),
-      legend.title = element_blank())
+graph_select_one(df = svy_v01, q = "Gen_Attitude") +
+  geom_hline(yintercept = 75, linetype = 3, color = "#000") +
+  geom_hline(yintercept = 50, linetype = 2, color = "#000") +
+  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
+  scale_fill_manual(values = attitude_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 70)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_blank())
 
 # Export locally
 ggsave(file.path("graphs", "survey-02_general-attitude.png"),
@@ -338,7 +334,6 @@ policy_cols <- c(
 # Actually make graph
 svy_v01 %>% 
   dplyr::mutate(Policies = dplyr::case_when(
-    Policies == "Other (please specify)" ~ "Other",
     Policies == "There are not any policies or guidelines at my institution" ~ "No institutional policy",
     TRUE ~ Policies)) %>% 
   graph_select_one(df = ., q = "Policies") +
@@ -448,21 +443,15 @@ sector_cols <- c(
   "Other" = "#343a40")
 
 # Actually make graph
-svy_v01 %>% 
-  dplyr::mutate(Work_Sector = dplyr::case_when(
-    Work_Sector == "Other (please specify)" ~ "Other",
-    TRUE ~ Work_Sector)) %>% 
-  graph_select_one(df = ., q = "Work_Sector") +
-    # geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    # geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
-    scale_fill_manual(values = sector_cols) +
-    labs(x = "", y = "Percent Responses (%)",
-      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Work_Sector"], width = 70)) +
-    supportR::theme_lyon(title_size = 20, text_size = 16) +
-    theme(axis.text.x = element_blank(),
-      axis.title.x = element_blank(),
-      legend.title = element_blank())
+graph_select_one(df = svy_v01, q = "Work_Sector") +
+  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
+  scale_fill_manual(values = sector_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Work_Sector"], width = 70)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_blank())
 
 # Export locally
 ggsave(file.path("graphs", "survey-02_work-sector.png"),
@@ -491,7 +480,6 @@ svy_v01 %>%
     Formal_Ed == "Doctoral degree (Ph.D., Sc.D., etc.)" ~ "Doctoral",
     Formal_Ed == "Master’s degree (M.S., M.A., etc.)" ~ "Master's",
     Formal_Ed == "4-year undergraduate degree (B.S., B.A., etc.)" ~ "4-Year",
-    Formal_Ed == "Other (please specify)" ~ "Other",
     TRUE ~ Formal_Ed)) %>% 
   graph_select_one(df = ., q = "Formal_Ed") +
     geom_hline(yintercept = 75, linetype = 3, color = "#000") +
@@ -572,21 +560,16 @@ gender_cols <- c(
   "Prefer not to answer" = "#000")
 
 # Actually make graph
-svy_v01 %>% 
-  dplyr::mutate(Gender = dplyr::case_when(
-    Gender == "Prefer to self-identify:" ~ "Prefer to self-identify",
-    TRUE ~ Gender)) %>% 
-  graph_select_one(df = ., q = "Gender") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
-    scale_fill_manual(values = gender_cols) +
-    labs(x = "", y = "Percent Responses (%)",
-      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gender"], width = 70)) +
-    supportR::theme_lyon(title_size = 20, text_size = 16) +
-    theme(axis.text.x = element_blank(),
-      axis.title.x = element_blank(),
-      legend.title = element_blank())
+graph_select_one(df = svy_v01, q = "Gender") +
+  geom_hline(yintercept = 50, linetype = 2, color = "#000") +
+  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
+  scale_fill_manual(values = gender_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gender"], width = 70)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_blank())
 
 # Export locally
 ggsave(file.path("graphs", "survey-02_demographics_gender.png"),
@@ -610,21 +593,14 @@ lgbt_cols <- c(
   "Prefer not to answer" = "#000")
 
 # Actually make graph
-svy_v01 %>% 
-  dplyr::mutate(LGBTQIA = dplyr::case_when(
-    LGBTQIA == "Prefer to self-identify:" ~ "Prefer to self-identify",
-    TRUE ~ LGBTQIA)) %>% 
-  graph_select_one(df = ., q = "LGBTQIA") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
-    scale_fill_manual(values = lgbt_cols) +
-    labs(x = "", y = "Percent Responses (%)",
-      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "LGBTQIA"], width = 70)) +
-    supportR::theme_lyon(title_size = 20, text_size = 16) +
-    theme(axis.text.x = element_blank(),
-      axis.title.x = element_blank(),
-      legend.title = element_blank())
+graph_select_one(df = svy_v01, q = "LGBTQIA") +
+  scale_fill_manual(values = lgbt_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "LGBTQIA"], width = 70)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_blank())
 
 # Export locally
 ggsave(file.path("graphs", "survey-02_demographics_lgbtqia.png"),
@@ -680,9 +656,6 @@ neuro_cols <- c(
 
 # Actually make graph
 graph_select_one(df = svy_v01, q = "Neurodiverse") +
-  geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-  geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
   scale_fill_manual(values = neuro_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Neurodiverse"], width = 70)) +
@@ -721,8 +694,6 @@ svy_v01 %>%
     Caregiver == "Share caregiving responsibilities equally with another person" ~ "Share equally with another",
     TRUE ~ Caregiver)) %>% 
   graph_select_one(df = ., q = "Caregiver") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
     geom_hline(yintercept = 25, linetype = 3, color = "#000") +
     scale_fill_manual(values = care_cols) +
     labs(x = "", y = "Percent Responses (%)",
@@ -754,9 +725,7 @@ first_gen_cols <- c(
 
 # Actually make graph
 graph_select_one(df = svy_v01, q = "FirstGen") +
-  geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-  geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
+  geom_hline(yintercept = 75, linetype = 3, color = "#fff") +
   scale_fill_manual(values = first_gen_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "FirstGen"], width = 70)) +

@@ -133,11 +133,26 @@ svy_v03 <- svy_v02 %>%
 dplyr::glimpse(svy_v03)
 
 ## -------------------------------------------- ##
+# Streamline Categories ----
+## -------------------------------------------- ##
+
+# For visualization purposes, we want some of the category names to be simplified
+svy_v04 <- svy_v03 %>% 
+  dplyr::mutate(dplyr::across(.cols = dplyr::where(fn = is.character),
+    .fns = ~ dplyr::case_when(
+        . == "Other (please specify)" ~ "Other",
+        . == "Prefer to self-identify:" ~ "Prefer to self-identify",
+        TRUE ~ .)))
+
+# Check structure
+dplyr::glimpse(svy_v04)
+
+## -------------------------------------------- ##
 # Export Outputs ----
 ## -------------------------------------------- ##
 
 # Make a final data object
-svy_v99 <- svy_v03
+svy_v99 <- svy_v04
 
 # Check its structure
 dplyr::glimpse(svy_v99)
