@@ -51,7 +51,7 @@ graph_select_one(df = svy_v01, q = "AIUse_Freq") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_ai-frequency.png"),
+ggsave(file.path("graphs", "survey-02_perspective_ai-frequency.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -97,7 +97,7 @@ ggplot(data = ai_reason_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_ai-reasons.png"),
+ggsave(file.path("graphs", "survey-02_perspective_ai-reasons.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -132,7 +132,7 @@ ggplot(data = task_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_task-interest.png"),
+ggsave(file.path("graphs", "survey-02_perspective_task-interest.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -167,7 +167,7 @@ ggplot(data = skill_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_tech-skill-interest.png"),
+ggsave(file.path("graphs", "survey-02_perspective_tech-skill-interest.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -202,7 +202,7 @@ ggplot(data = trainrec_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_training-received.png"),
+ggsave(file.path("graphs", "survey-02_perspective_training-received.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -237,7 +237,7 @@ ggplot(data = traindes_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_training-desired.png"),
+ggsave(file.path("graphs", "survey-02_perspective_training-desired.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -265,7 +265,7 @@ graph_select_one(df = svy_v01, q = "Gen_Attitude") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_general-attitude.png"),
+ggsave(file.path("graphs", "survey-02_perspective_general-attitude.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -300,7 +300,7 @@ ggplot(data = prom_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_opportunities.png"),
+ggsave(file.path("graphs", "survey-02_perspective_opportunities.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -335,7 +335,7 @@ ggplot(data = chal_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_challenges.png"),
+ggsave(file.path("graphs", "survey-02_perspective_challenges.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -373,7 +373,7 @@ svy_v01 %>%
       legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_policies.png"),
+ggsave(file.path("graphs", "survey-02_perspective_policies.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -410,7 +410,7 @@ svy_v01 %>%
       legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_career-stage.png"),
+ggsave(file.path("graphs", "survey-02_job_career-stage.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -445,7 +445,7 @@ ggplot(data = role_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_professional-role.png"),
+ggsave(file.path("graphs", "survey-02_job_professional-role.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -477,7 +477,7 @@ graph_select_one(df = svy_v01, q = "Work_Sector") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_work-sector.png"),
+ggsave(file.path("graphs", "survey-02_job_work-sector.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -511,7 +511,7 @@ svy_v01 %>%
       legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_formal-education.png"),
+ggsave(file.path("graphs", "survey-02_job_formal-education.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -546,7 +546,7 @@ graph_select_one(df = svy_v01, q = "Field") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_field.png"),
+ggsave(file.path("graphs", "survey-02_job_field.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -574,7 +574,7 @@ svy_v01 %>%
       legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_data-science-frequency.png"),
+ggsave(file.path("graphs", "survey-02_perspective_ds-frequency.png"),
   height = 7, width = 7, units = "in")
 
 ## -------------------------------------------- ##
