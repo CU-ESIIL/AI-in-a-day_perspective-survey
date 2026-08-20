@@ -54,8 +54,27 @@ graph_select_one(df = svy_v01, q = "AIUse_Freq") +
 ggsave(file.path("graphs", "survey-02_perspective_ai-frequency.png"),
   height = 7, width = 7, units = "in")
 
-# Tidy environment
-## NOT CURRENTLY NEEDED
+## -------------------------------------------- ##
+# Data Science Frequency Graph ----
+## -------------------------------------------- ##
+
+# Actually make graph
+svy_v01 %>% 
+  dplyr::mutate(DS_Freq = dplyr::case_when(
+    DS_Freq == "I do not use data science in my research/role" ~ "Never",
+    TRUE ~ DS_Freq)) %>% 
+  graph_select_one(df = ., q = "DS_Freq") +
+    scale_fill_manual(values = freq_cols) +
+    labs(x = "", y = "Percent Responses (%)",
+      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "DS_Freq"], width = 70)) +
+    supportR::theme_lyon(title_size = 20, text_size = 16) +
+    theme(axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.title = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "survey-02_perspective_ds-frequency.png"),
+  height = 7, width = 7, units = "in")
 
 ## -------------------------------------------- ##
 # AI Use Reasons Graph ----
@@ -551,31 +570,6 @@ ggsave(file.path("graphs", "survey-02_job_field.png"),
 
 # Tidy environment
 rm(list = c("field_cols")) 
-
-## -------------------------------------------- ##
-# Data Science Frequency Graph ----
-## -------------------------------------------- ##
-
-# Check contents
-unique(svy_v01$DS_Freq)
-
-# Actually make graph
-svy_v01 %>% 
-  dplyr::mutate(DS_Freq = dplyr::case_when(
-    DS_Freq == "I do not use data science in my research/role" ~ "Never",
-    TRUE ~ DS_Freq)) %>% 
-  graph_select_one(df = ., q = "DS_Freq") +
-    scale_fill_manual(values = freq_cols) +
-    labs(x = "", y = "Percent Responses (%)",
-      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "DS_Freq"], width = 70)) +
-    supportR::theme_lyon(title_size = 20, text_size = 16) +
-    theme(axis.text.x = element_blank(),
-      axis.title.x = element_blank(),
-      legend.title = element_blank())
-
-# Export locally
-ggsave(file.path("graphs", "survey-02_perspective_ds-frequency.png"),
-  height = 7, width = 7, units = "in")
 
 ## -------------------------------------------- ##
 # Gender Graph ----
