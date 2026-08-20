@@ -31,20 +31,18 @@ dplyr::glimpse(svy_v01)
 lkup <- read.csv(file.path("data", "01_question-lookup-table.csv"))
 # dplyr::glimpse(lkup)
 
+# Define some color palettes used in multiple graphs
+freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", 
+  "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000")
+sent_cols <- c("positive" = "#669bbc", "neutral" = "#edede9", "negative" = "#c1121f")
+
 ## -------------------------------------------- ##
 # AI Frequency Graph ----
 ## -------------------------------------------- ##
 
-# Make custom color palette
-ai_freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", 
-  "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000")
-
-# Actually make graph
+# Make the graph
 graph_select_one(df = svy_v01, q = "AIUse_Freq") +
-  geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-  geom_hline(yintercept = 50, linetype = 2, color = "#fff") +
-  geom_hline(yintercept = 25, linetype = 3, color = "#fff") +
-  scale_fill_manual(values = ai_freq_cols) +
+  scale_fill_manual(values = freq_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "AIUse_Freq"], width = 70)) +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
@@ -57,7 +55,7 @@ ggsave(file.path("graphs", "survey-02_ai-frequency.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
-rm(list = c("ai_freq_cols"))
+## NOT CURRENTLY NEEDED
 
 ## -------------------------------------------- ##
 # AI Use Reasons Graph ----
@@ -65,6 +63,16 @@ rm(list = c("ai_freq_cols"))
 
 # Prep the data for graphing
 ai_reason_df <- prep_select_all(df = svy_v01, q = "AIUse_reasons") %>% 
+  dplyr::mutate(value = ifelse(value == "Other (please specify)",
+    yes = "Other", no = value)) %>% 
+  dplyr::mutate(sentiment = dplyr::case_when(
+    value %in% c("Desire to improve the quality of my work",
+      "Desire to work more efficiently",
+      "Expand the scope of information and resources that are accessible to me (e.g., learning a new coding language, entering a new sub-discipline)",
+      "Get personalized assistance for work challenges"
+        ) ~ "positive",
+    value %in% c("My institution's policies", "Other") ~ "neutral",
+    TRUE ~ "negative")) %>% 
   dplyr::mutate(value = stringr::str_wrap(string = value, width = 40)) %>% 
   dplyr::mutate(value = factor(value, levels = rev(unique(value))))
 
@@ -73,14 +81,18 @@ dplyr::glimpse(ai_reason_df)
 
 # Make graph
 ggplot(data = ai_reason_df, aes(x = percent, y = value, 
-    fill = value, color = 'x')) +
+    fill = sentiment, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
+  scale_fill_manual(values = sent_cols) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "AIUse_reasons"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -107,12 +119,15 @@ dplyr::glimpse(task_df)
 ggplot(data = task_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Task_interest"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -139,12 +154,15 @@ dplyr::glimpse(skill_df)
 ggplot(data = skill_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "TechSkill_Interest"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -171,12 +189,15 @@ dplyr::glimpse(trainrec_df)
 ggplot(data = trainrec_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Training_Received"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -203,12 +224,15 @@ dplyr::glimpse(traindes_df)
 ggplot(data = traindes_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Training_Desired"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -232,9 +256,6 @@ attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
 
 # Actually make graph
 graph_select_one(df = svy_v01, q = "Gen_Attitude") +
-  geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-  geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
   scale_fill_manual(values = attitude_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 70)) +
@@ -266,12 +287,15 @@ dplyr::glimpse(prom_df)
 ggplot(data = prom_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "PromisingOpps"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -298,12 +322,15 @@ dplyr::glimpse(chal_df)
 ggplot(data = chal_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Challenges"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -337,9 +364,6 @@ svy_v01 %>%
     Policies == "There are not any policies or guidelines at my institution" ~ "No institutional policy",
     TRUE ~ Policies)) %>% 
   graph_select_one(df = ., q = "Policies") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
     scale_fill_manual(values = policy_cols) +
     labs(x = "", y = "Percent Responses (%)",
       title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Policies"], width = 70)) +
@@ -377,9 +401,6 @@ svy_v01 %>%
     Career_Stage == "Mid-Career Stage (10–25 years of experience)" ~ "Mid-Career (10-25 years)",
     Career_Stage == "Mature Career Stage (26+ years of experience)" ~ "Mature (26+ Years)")) %>% 
   graph_select_one(df = ., q = "Career_Stage") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
     scale_fill_manual(values = stage_cols) +
     labs(x = "", y = "Percent Responses (%)",
       title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Career_Stage"], width = 70)) +
@@ -411,12 +432,15 @@ dplyr::glimpse(role_df)
 ggplot(data = role_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Prof_Role"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
@@ -444,7 +468,6 @@ sector_cols <- c(
 
 # Actually make graph
 graph_select_one(df = svy_v01, q = "Work_Sector") +
-  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
   scale_fill_manual(values = sector_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Work_Sector"], width = 70)) +
@@ -458,7 +481,7 @@ ggsave(file.path("graphs", "survey-02_work-sector.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
-rm(list = c("sector_cols"))
+rm(list = c("sector_cols")) 
   
 ## -------------------------------------------- ##
 # Formal Education Graph ----
@@ -468,11 +491,8 @@ rm(list = c("sector_cols"))
 unique(svy_v01$Formal_Ed)
 
 # Make custom color palette
-formal_ed_cols <- c(
-  "Doctoral" = "#b5838d",
-  "Master's" = "#e5989b",
-  "4-Year" = "#ffb4a2",
-  "Other" = "#343a40")
+formal_ed_cols <- c("Doctoral" = "#b5838d", "Master's" = "#e5989b",
+  "4-Year" = "#ffb4a2", "Other" = "#343a40")
 
 # Actually make graph
 svy_v01 %>% 
@@ -482,9 +502,6 @@ svy_v01 %>%
     Formal_Ed == "4-year undergraduate degree (B.S., B.A., etc.)" ~ "4-Year",
     TRUE ~ Formal_Ed)) %>% 
   graph_select_one(df = ., q = "Formal_Ed") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
     scale_fill_manual(values = formal_ed_cols) +
     labs(x = "", y = "Percent Responses (%)",
       title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Formal_Ed"], width = 70)) +
@@ -504,10 +521,36 @@ rm(list = c("formal_ed_cols"))
 # Field Graph ----
 ## -------------------------------------------- ##
 
+# Check contents
 unique(svy_v01$Field)
-# <frequency!>
 
-# !!! Note: holding off on drafting this graph's code until we get more responses !!!
+# Make custom color palette
+field_cols <- c(
+  "Environmental science" = "#80ed99", 
+  "Ecology" = "#57cc99", 
+  "Marine science/oceanography" = "#38a3a5", 
+  "Conservation biology" = "#22577a", 
+  "Data science/computational science" = "#a68a64", 
+  "Geography/GIS" = "#7f5539", 
+  "Education" = "#ffb703", 
+  "Other" = "#343a40")
+
+# Actually make graph
+graph_select_one(df = svy_v01, q = "Field") +
+  scale_fill_manual(values = field_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Field"], width = 70)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "survey-02_field.png"),
+  height = 7, width = 7, units = "in")
+
+# Tidy environment
+rm(list = c("field_cols")) 
 
 ## -------------------------------------------- ##
 # Data Science Frequency Graph ----
@@ -516,20 +559,13 @@ unique(svy_v01$Field)
 # Check contents
 unique(svy_v01$DS_Freq)
 
-# Make custom color palette
-ds_freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", 
-  "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000")
-
 # Actually make graph
 svy_v01 %>% 
   dplyr::mutate(DS_Freq = dplyr::case_when(
     DS_Freq == "I do not use data science in my research/role" ~ "Never",
     TRUE ~ DS_Freq)) %>% 
   graph_select_one(df = ., q = "DS_Freq") +
-    geom_hline(yintercept = 75, linetype = 3, color = "#000") +
-    geom_hline(yintercept = 50, linetype = 2, color = "#fff") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#fff") +
-    scale_fill_manual(values = ds_freq_cols) +
+    scale_fill_manual(values = freq_cols) +
     labs(x = "", y = "Percent Responses (%)",
       title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "DS_Freq"], width = 70)) +
     supportR::theme_lyon(title_size = 20, text_size = 16) +
@@ -541,9 +577,6 @@ svy_v01 %>%
 ggsave(file.path("graphs", "survey-02_data-science-frequency.png"),
   height = 7, width = 7, units = "in")
 
-# Tidy environment
-rm(list = c("ds_freq_cols"))
-  
 ## -------------------------------------------- ##
 # Gender Graph ----
 ## -------------------------------------------- ##
@@ -561,8 +594,6 @@ gender_cols <- c(
 
 # Actually make graph
 graph_select_one(df = svy_v01, q = "Gender") +
-  geom_hline(yintercept = 50, linetype = 2, color = "#000") +
-  geom_hline(yintercept = 25, linetype = 3, color = "#000") +
   scale_fill_manual(values = gender_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gender"], width = 70)) +
@@ -625,19 +656,55 @@ dplyr::glimpse(race_df)
 ggplot(data = race_df, aes(x = percent, y = value, 
     fill = value, color = 'x')) +
   geom_bar(stat = "identity") +
+  geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+  geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
   scale_color_manual(values = "#000") +
   labs(x = "Percent Respondents (%)", y = "",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Race_Ethnicity"], width = 70)) +
   guides(color = "none") +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
     theme(axis.title.y = element_blank(),
+      plot.title = element_text(size = 20),
       legend.title = element_blank(),
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "survey-02_demographics_race-ethnicity.png"),
+ggsave(file.path("graphs", "survey-02_demographics_race-ethnicity_v1.png"),
   height = 15, width = 15, units = "in")
-  
+
+# Parse the data differently to create a (slightly) different graph
+race_df <- svy_v01 %>% 
+  dplyr::mutate(Race_Ethnicity = dplyr::case_when(
+    stringr::str_detect(string = Race_Ethnicity, pattern = "Prefer not to answer") ~ "Prefer not to answer",
+    stringr::str_detect(string = Race_Ethnicity, pattern = ",") ~ "Multiracial / Multi-ethnic",
+    TRUE ~ Race_Ethnicity)) %>% 
+  prep_select_all(df = ., q = "Race_Ethnicity") %>% 
+  dplyr::mutate(value = stringr::str_wrap(string = value, width = 40)) %>% 
+  dplyr::mutate(value = factor(value, levels = rev(unique(value))))
+
+# Check structure
+dplyr::glimpse(race_df)
+
+# Make the second variant of the graph
+ggplot(data = race_df, aes(x = percent, y = value, 
+  fill = value, color = 'x')) +
+geom_bar(stat = "identity") +
+geom_vline(xintercept = 50, linetype = 2, color = "#000") +
+geom_text(label = "50%", x = 52, y = 1, size = 10, angle = 270) +
+scale_color_manual(values = "#000") +
+labs(x = "Percent Respondents (%)", y = "",
+  title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Race_Ethnicity"], width = 70)) +
+guides(color = "none") +
+supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(axis.title.y = element_blank(),
+    plot.title = element_text(size = 20),
+    legend.title = element_blank(),
+    legend.position = "none")
+
+# Export locally
+ggsave(file.path("graphs", "survey-02_demographics_race-ethnicity_v2.png"),
+  height = 15, width = 15, units = "in")
+
 # Tidy environment
 rm(list = c("race_df"))
 
@@ -679,12 +746,11 @@ rm(list = c("neuro_cols"))
 unique(svy_v01$Caregiver)
 
 # Make custom color palette
-care_cols <- c(
-  "Not a caregiver" = "#000",
-  "In past but not now" = "#adb5bd",
-  "Primary caregiver" = "#e9ecef",
-  "Contributor/Secondary caregiver" = "#6c757d",
-  "Share equally with another" = "#343a40",
+care_cols <- c("Not a caregiver" = "#b9faf8",
+  "In past but not now" = "#dec9e9",
+  "Primary caregiver" = "#6247aa",
+  "Contributor/Secondary caregiver" = "#b185db",
+  "Share equally with another" = "#815ac0",
   "Prefer not to answer" = "#fff")
 
 # Actually make graph
@@ -694,7 +760,6 @@ svy_v01 %>%
     Caregiver == "Share caregiving responsibilities equally with another person" ~ "Share equally with another",
     TRUE ~ Caregiver)) %>% 
   graph_select_one(df = ., q = "Caregiver") +
-    geom_hline(yintercept = 25, linetype = 3, color = "#000") +
     scale_fill_manual(values = care_cols) +
     labs(x = "", y = "Percent Responses (%)",
       title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Caregiver"], width = 70)) +
@@ -718,14 +783,12 @@ rm(list = c("care_cols"))
 unique(svy_v01$FirstGen)
 
 # Make custom color palette
-first_gen_cols <- c(
-  "No" = "#04471c",
-  "Yes" = "#16db65",
+first_gen_cols <- c("No" = "#55a630",
+  "Yes" = "#d4d700",
   "Prefer not to answer" = "#000")
 
 # Actually make graph
 graph_select_one(df = svy_v01, q = "FirstGen") +
-  geom_hline(yintercept = 75, linetype = 3, color = "#fff") +
   scale_fill_manual(values = first_gen_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "FirstGen"], width = 70)) +
