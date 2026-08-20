@@ -85,3 +85,4 @@ vignettes/*.pdf
 # Folders to ignore
 data/
 graphs/
+graphs_fake/
