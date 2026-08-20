@@ -7,7 +7,7 @@
 #' 
 #' importFrom magrittr %>%
 #' 
-prep_select_all <- function(df = NULL, q = NULL){
+prep_select_all <- function(df = NULL, q = NULL, summarize = FALSE){
 
   # Error checks for 'df'
   if(is.null(df) || "data.frame" %in% class(df) != TRUE)
@@ -47,6 +47,7 @@ prep_select_all <- function(df = NULL, q = NULL){
     dplyr::mutate(value = gsub(pattern = "’", replacement = "'", x = value))
     
   # Summarize response data
+  if (summarize) {
   df_v07 <- df_v06 %>% 
     dplyr::mutate(total_respondents = length(unique(ResponseId))) %>% 
     dplyr::group_by(value, total_respondents) %>% 
@@ -56,6 +57,8 @@ prep_select_all <- function(df = NULL, q = NULL){
     dplyr::arrange(dplyr::desc(percent))
   
   # Return it
-  return(df_v07) }
-
+  return(df_v07) } else{
+    return(df_v06)
+  }
+}
 # End ----
