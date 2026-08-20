@@ -6,7 +6,7 @@
 
 # Load libraries
 # install.packages("librarian")
-librarian::shelf(tidyverse, cowplot, supportR)
+librarian::shelf(tidyverse, supportR)
 
 # Get set up
 source(file.path("-setup.r"))
@@ -37,46 +37,23 @@ freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd",
 sent_cols <- c("positive" = "#669bbc", "neutral" = "#edede9", "negative" = "#c1121f")
 
 ## -------------------------------------------- ##
-# AI & DS Frequency Graphs ----
+# AI Frequency Graph ----
 ## -------------------------------------------- ##
 
 # Make the graph
-(ai_freq_graph <- graph_select_one(df = svy_v01, q = "AIUse_Freq") +
+graph_select_one(df = svy_v01, q = "AIUse_Freq") +
   scale_fill_manual(values = freq_cols) +
   labs(x = "", y = "Percent Responses (%)",
     title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "AIUse_Freq"], width = 70)) +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
   theme(axis.text.x = element_blank(),
     axis.title.x = element_blank(),
-    legend.title = element_blank()))
+    legend.title = element_blank())
 
 # Export locally
 ggsave(file.path("graphs", "survey-02_ai-frequency.png"),
   height = 7, width = 7, units = "in")
 
-# Actually make graph
-(ds_freq_graph <- svy_v01 %>% 
-  dplyr::mutate(DS_Freq = dplyr::case_when(
-    DS_Freq == "I do not use data science in my research/role" ~ "Never",
-    TRUE ~ DS_Freq)) %>% 
-  graph_select_one(df = ., q = "DS_Freq") +
-    scale_fill_manual(values = freq_cols) +
-    labs(x = "", y = "Percent Responses (%)",
-      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "DS_Freq"], width = 70)) +
-    supportR::theme_lyon(title_size = 20, text_size = 16) +
-    theme(axis.text.x = element_blank(),
-      axis.title.x = element_blank(),
-      legend.title = element_blank()))
-
-# Export locally
-ggsave(file.path("graphs", "survey-02_data-science-frequency.png"),
-  height = 7, width = 7, units = "in")
-
-
-# Export locally
-ggsave(file.path("graphs", "survey-02_multiple_ai-ds-frequency.png"),
-  height = 7, width = 10, units = "in")
-  
 # Tidy environment
 ## NOT CURRENTLY NEEDED
 
@@ -574,6 +551,31 @@ ggsave(file.path("graphs", "survey-02_field.png"),
 
 # Tidy environment
 rm(list = c("field_cols")) 
+
+## -------------------------------------------- ##
+# Data Science Frequency Graph ----
+## -------------------------------------------- ##
+
+# Check contents
+unique(svy_v01$DS_Freq)
+
+# Actually make graph
+svy_v01 %>% 
+  dplyr::mutate(DS_Freq = dplyr::case_when(
+    DS_Freq == "I do not use data science in my research/role" ~ "Never",
+    TRUE ~ DS_Freq)) %>% 
+  graph_select_one(df = ., q = "DS_Freq") +
+    scale_fill_manual(values = freq_cols) +
+    labs(x = "", y = "Percent Responses (%)",
+      title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "DS_Freq"], width = 70)) +
+    supportR::theme_lyon(title_size = 20, text_size = 16) +
+    theme(axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.title = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "survey-02_data-science-frequency.png"),
+  height = 7, width = 7, units = "in")
 
 ## -------------------------------------------- ##
 # Gender Graph ----
