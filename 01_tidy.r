@@ -139,10 +139,11 @@ dplyr::glimpse(svy_v03)
 # For visualization purposes, we want some of the category names to be simplified
 svy_v04 <- svy_v03 %>% 
   dplyr::mutate(dplyr::across(.cols = dplyr::where(fn = is.character),
+    .fns = ~ gsub(pattern = "Other \\(please specify\\)", replacement = "Other", x = .))) %>% 
+  dplyr::mutate(dplyr::across(.cols = dplyr::where(fn = is.character),
     .fns = ~ dplyr::case_when(
-        . == "Other (please specify)" ~ "Other",
-        . == "Prefer to self-identify:" ~ "Prefer to self-identify",
-        TRUE ~ .)))
+      . == "Prefer to self-identify:" ~ "Prefer to self-identify",
+      TRUE ~ .)))
 
 # Check structure
 dplyr::glimpse(svy_v04)
