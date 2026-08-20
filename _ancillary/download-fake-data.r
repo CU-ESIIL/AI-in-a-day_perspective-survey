@@ -21,14 +21,16 @@ rm(list = ls()); gc()
 
 # Identify key
 fake_drive <- googledrive::drive_ls(googledrive::as_id("https://drive.google.com/drive/u/0/folders/10aVF7_SL1Zb1IDny2yi7b5Lj3Mq-D1RX")) %>% 
-  dplyr::filter(name == "broken-row-survey-data.csv")
+  dplyr::filter(name %in% c("broken-row-survey-data.csv",
+    "01_question-lookup-table.csv"))
 
 # Did that work?
 fake_drive
 
-# Download the data key
-googledrive::drive_download(file = fake_drive$id, overwrite = TRUE,
-  path = file.path("data", fake_drive$name))
+# Download the fake data and question lookup table
+purrr::walk2(.x = fake_drive$id, .y = fake_drive$name,
+  .f = ~ googledrive::drive_download(file = .x, overwrite = TRUE,
+    path = file.path("data", .y)))
 
 # Clear environment + collect garbage
 rm(list = ls()); gc()
