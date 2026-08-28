@@ -6,7 +6,7 @@
 
 # Load libraries
 # install.packages("librarian")
-librarian::shelf(tidyverse, supportR, lme4, RColorBrewer, patchwork, ggplot2)
+librarian::shelf(tidyverse, supportR, lme4, RColorBrewer, patchwork, ggplot2, maps)
 
 # Get set up
 source(file.path("-setup.r"))
@@ -19,7 +19,7 @@ purrr::walk(.x = dir(path = file.path("tools"),
     pattern = "*.r", full.names = TRUE),
   .f = ~ source(file = .x))
 
-real_data = FALSE
+real_data = TRUE
 # Read in data
 if (real_data) {
 svy_v01 <- read.csv(file.path("data", "01_tidied-responses.csv")) %>% 
@@ -42,6 +42,41 @@ lkup <- read.csv(file.path("data", "01_question-lookup-table.csv"))
 # dplyr::glimpse(lkup)
 
 ## -------------------------------------------- ##
+# Geography ----
+## -------------------------------------------- ##
+library()
+
+# Get world polygon geometry
+world_sf <- st_as_sf(maps::map("world", plot = FALSE, fill = TRUE)) %>%
+  left_join(., (svy_v01 %>%
+                  mutate(Country = 
+                           case_when(Country ==  'United States of America' ~ 'USA',
+                                     Country ==  'United Kingdom' ~ 'UK',
+                                     Country ==  'U.S. Virgin Is.' ~ 'Virgin Islands, US',
+                                     TRUE ~ Country
+                           )
+                  ) %>%
+                 group_by(Country)%>%
+              dplyr::summarise(total_n = dplyr::n())), by = c('ID' = 'Country'))
+
+ggplot(world_sf) +
+  geom_sf(aes(fill = total_n), colour = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(trans = "log10",option = "turbo", na.value = "grey90", 
+                       breaks = c(1, 10, 100, 400)) +
+  labs(title = "Survey respondents by country",
+       fill = "Total") +
+  supportR::theme_lyon(title_size = 20, text_size = 16)+
+  theme(axis.title.y = element_blank(),
+        plot.title = element_text(size = 20),
+        legend.title = element_blank(),
+        legend.text=element_text(size=16))
+
+
+# Export locally
+ggsave(file.path(graph_path, "respondents_by_country.png"),
+       height = 15, width = 15, units = "in")
+
+## -------------------------------------------- ##
 # Training Received vs Training Desired ----
 ## -------------------------------------------- ##
 
@@ -55,6 +90,13 @@ traindes_df <- prep_select_all(df = svy_v01, q = "Training_Desired", summarize =
   mutate(response = "Yes", type = 'want')%>%
   rename(ResponseId = want_ResponseId)
 
+prof_df <- prep_select_all(df = svy_v01, q = "Prof_Role", summarize = FALSE) 
+
+non_students <-prof_df %>%
+  filter(value == 'Student')%>%
+  select(ResponseId) %>%
+  anti_join(prof_df, ., by = 'ResponseId')
+
 # fill out the NO's by difference
 train_binary <- bind_rows(trainrec_df, traindes_df)
 
@@ -63,7 +105,6 @@ value  = unique(train_binary$value),
 type = unique(train_binary$type)) %>%
   anti_join(., train_binary, by = c("ResponseId", "value", "type")) %>%
   mutate(response = "No")
-
 
 # Join the selected and inferred not selected
 train_binary <- bind_rows(train_binary, not_response) %>%
@@ -76,7 +117,8 @@ dplyr::glimpse(train_binary)
 #relevel so the intercepts reflect what people WANT to learn
 train_binary$type <- relevel(factor(train_binary$type), ref = "want")
 
-m_no_int_want_ref <- glmer(
+# random intercepts as subjects not distinct
+m_no_int_want_ref_baseline <- glmer(
   response_numeric ~ 0 + learning_mode + learning_mode:type + (1 | ResponseId),
   family = binomial,
   data = train_binary,
@@ -84,8 +126,21 @@ m_no_int_want_ref <- glmer(
   control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
 )
 
-coefs <- summary(m_no_int_want_ref)$coefficients
-coefs
+# this one is probably more correct if it's not singular;
+# would assume some people just overall WANT more training and/or HAD
+# more training, but not that the same people want/have more training
+m_no_int_want_ref_random <- glmer(
+  response_numeric ~ 0 + learning_mode + learning_mode:type + (1 + type | ResponseId),
+  family = binomial,
+  data = train_binary,
+  #may not need this funkiness if working with real data where the ranefs should be more estimable
+  control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+)
+
+anova(m_no_int_want_ref_baseline, m_no_int_want_ref_random)
+
+coefs <- summary(m_no_int_want_ref_random)$coefficients
+# coefs
 
 ###### Aggregate for plotting
 # Prep both 'training received' and 'training desired' dataframes
@@ -130,6 +185,11 @@ train_plot <- train_v02 |>
   dplyr::group_by(value) |>
   dplyr::mutate(label_x = max(percent_responses) + 2) |>
   dplyr::ungroup()
+
+# Reorder value factor by percent_responses for 'desires' status
+train_plot <- train_plot |>
+  mutate(value = forcats::fct_reorder(value, percent_responses, 
+                                       .fun = function(x) mean(train_plot$percent_responses[train_plot$status == "desires"])))
 
 # Plot
 ggplot(train_plot, aes(x = percent_responses, y = value, fill = status)) +
