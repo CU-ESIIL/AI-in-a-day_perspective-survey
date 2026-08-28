@@ -43,14 +43,8 @@ traindes_df <- prep_select_all(df = svy_v01, q = "Training_Desired") %>%
   dplyr::rename_with(.fn = ~ paste0("want_", .), .cols = -value)
 
 # Join the two questions' prepared dfs and calculate difference
-train_v01 <- dplyr::full_join(x = trainrec_df, y = traindes_df, by = "value") %>% 
-  dplyr::mutate(value = stringr::str_wrap(string = value, width = 40))
-
-# Check structure
-dplyr::glimpse(train_v01)
-
-# Calculate difference between received and desired training
-train_diff <- train_v01 %>% 
+train_diff <- dplyr::full_join(x = trainrec_df, y = traindes_df, by = "value") %>% 
+  dplyr::mutate(value = stringr::str_wrap(string = value, width = 30)) %>% 
   dplyr::mutate(diff_percent = had_percent - want_percent) %>% 
   dplyr::arrange(dplyr::desc(diff_percent)) %>% 
   dplyr::mutate(value = factor(value, levels = unique(value)))
@@ -58,21 +52,38 @@ train_diff <- train_v01 %>%
 # Check structure
 dplyr::glimpse(train_diff)
 
+# Define colors
+unique(train_diff$value)
+train_cols <- c(
+  "Formal coursework (e.g.,\nsemester/quarter)" = "#7400b8",
+  "Multi-day short courses" = "#6930c3",
+  "In-person workshops (~1-8\nhours)" = "#5e60ce",
+  "Synchronous virtual workshops\n(~1-8 hours)" = "#5390d9",
+  "Self-teaching through\nlong-form online websites /\nvideos (i.e., hours of\ncontent)" = "#4ea8de",
+  "Self-teaching through\nshort-form online websites /\nvideos (i.e., minutes of\ncontent)" = "#48bfe3",
+  "Through colleagues or peers" = "#72efdd",
+  "Through social media" = "#80ffdb",
+  "Other" = "#343a40")
+
 # Make a test graph
 ggplot(data = train_diff, aes(x = diff_percent, y = value, 
-  fill = value, color = 'x')) +
-geom_bar(stat = "identity") +
-xlim(c(-50, 50)) +
-scale_color_manual(values = "#000") +
-labs(x = "Percent Respondents (%)", y = "") +
-guides(color = "none") +
-supportR::theme_lyon(title_size = 20, text_size = 16) +
-  theme(axis.title.y = element_blank(),
-    legend.title = element_blank(),
-    legend.position = "none")
+    fill = value, color = 'x')) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = 0, linetype = 1, color = "#000") +
+  geom_vline(xintercept = c(-25, 25), linetype = 3, color = "#000") +
+  geom_text(label = "Training Deficit", x = -35, y = 4.5, size = 10) +
+  geom_text(label = "Training Surplus", x = 35, y = 4.5, size = 10) +
+  xlim(c(-50, 50)) +
+  scale_color_manual(values = "#000") +
+  scale_fill_manual(values = train_cols) +
+  labs(x = "Training Received (%) - Training Desired (%)", y = "") +
+  supportR::theme_lyon(title_size = 30, text_size = 25) +
+    theme(axis.title.y = element_blank(),
+      legend.title = element_blank(),
+      legend.position = "none")
 
 # Export locally
 ggsave(file.path("graphs", "03_training_want-had-diffs.png"),
-  height = 15, width = 15, units = "in")
+  height = 15, width = 18, units = "in")
 
 # End ----
