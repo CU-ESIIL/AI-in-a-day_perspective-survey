@@ -1,8 +1,8 @@
 ## -------------------------------------------- ##
-# Script 02 (Single Q Viz) Uploads ----
+# Script 03 (Multi Q Viz) Uploads ----
 ## -------------------------------------------- ##
 # Purpose
-## Upload graphs produced by script #2 (`02_viz-single-qs.r`) to the group's Shared Drive
+## Upload graphs produced by script #3 (`02_viz-multi-qs.r`) to the group's Shared Drive
 
 # Load libraries
 # install.packages("librarian")
@@ -19,10 +19,10 @@ rm(list = ls()); gc()
 ## -------------------------------------------- ##
 
 # Identify local files
-(local_outs <- dir(path = file.path("graphs"), pattern = "02_"))
+(local_outs <- dir(path = file.path("graphs"), pattern = "03_"))
 
 # Identify relevant Drive folder
-drive_dest <- googledrive::as_id("https://drive.google.com/drive/folders/1Vx6VV3ox3xXvuj6S0SAs-HEjOEbEJ7vU")
+drive_dest <- googledrive::as_id("https://drive.google.com/drive/folders/10yM6nSrL3ss3Ip3MDEI2dNlS2FB7uu3B")
 
 # Upload all outputs to that folder (overwriting where one already exists)
 purrr::walk(.x = local_outs,

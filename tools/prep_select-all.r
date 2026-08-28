@@ -7,7 +7,7 @@
 #' 
 #' importFrom magrittr %>%
 #' 
-prep_select_all <- function(df = NULL, q = NULL, summarize = FALSE){
+prep_select_all <- function(df = NULL, q = NULL, summarize = TRUE){
 
   # Error checks for 'df'
   if(is.null(df) || "data.frame" %in% class(df) != TRUE)
@@ -16,6 +16,11 @@ prep_select_all <- function(df = NULL, q = NULL, summarize = FALSE){
   # Error checks for 'q'
   if(is.null(q) || length(q) != 1 || is.character(q) != TRUE || q %in% names(df) != TRUE)
     stop("'q' must match a single column name in 'df'")
+  
+  # Error checks for 'summarize'
+  if(!is.logical(summarize)){
+    warning("'summarize' must be a logical. Coercing to TRUE")
+    summarize <- TRUE }
   
   # Remove NAs in relevant question
   df_v02 <- df[!is.na(df[[q]]),]
