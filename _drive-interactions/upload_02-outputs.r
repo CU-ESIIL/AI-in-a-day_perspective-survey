@@ -19,7 +19,7 @@ rm(list = ls()); gc()
 ## -------------------------------------------- ##
 
 # Identify local files
-(local_outs <- dir(path = file.path("graphs"), pattern = "survey-02_"))
+(local_outs <- dir(path = file.path("graphs"), pattern = "02_"))
 
 # Identify relevant Drive folder
 drive_dest <- googledrive::as_id("https://drive.google.com/drive/folders/1Vx6VV3ox3xXvuj6S0SAs-HEjOEbEJ7vU")
