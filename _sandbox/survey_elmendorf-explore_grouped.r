@@ -2,8 +2,8 @@
 # survey_elmendorf_gpt-oss-120b_explore.R
 # -------------------------------------------------
 # Exploratory Data Analysis (EDA) for the AI‑in‑a‑Day perspective survey.
-# Focus: AI attitudes and the gap between training received vs desired,
-# stratified by career stage (students vs non‑students).
+# Focus: Multi‑select questions (training received, training desired, task interest, tech skill interest)
+#  and their relationship with demographic-ish groups in terms of experience, attitude.
 #
 # This script lives in the sandbox folder – it is intended for ad‑hoc
 # analysis and does **not** modify the FAIR pipeline.
