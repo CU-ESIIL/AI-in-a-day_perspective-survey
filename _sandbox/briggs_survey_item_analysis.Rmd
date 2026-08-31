@@ -1,0 +1,698 @@
+---
+title: "AI in a Day Workshop: Baseline Survey — Item-by-Item Analysis"
+author: "Prepared for the ESIIL workshop design team"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    theme: flatly
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8.5, fig.height = 5)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(forcats)
+library(knitr)
+library(kableExtra)
+library(scales)
+
+real_data <- TRUE   # FALSE → use de‑identified `broken-row‑survey‑data.csv`
+if (real_data) {
+  d <- read.csv(file.path("..", "data", "01_tidied-responses.csv"))
+    #read.csv(file.path("data", "01_tidied-responses.csv"))
+} else {
+  d<- read.csv(file.path("data", "broken-row-survey-data.csv"))
+}
+
+# d   <- read.csv("broken-row-survey-data.csv", stringsAsFactors = FALSE)
+key <- read.csv(file.path("..", "data", "01_question-lookup-table.csv"), stringsAsFactors = FALSE)
+
+# Treat empty strings as item nonresponse
+d[d == ""] <- NA
+N <- nrow(d)
+
+qtext <- function(v) key$question_text[match(v, key$name_in_data)]
+
+theme_set(theme_minimal(base_size = 12) +
+            theme(panel.grid.minor = element_blank(),
+                  plot.title.position = "plot"))
+fill_col <- "#2b7a78"
+
+# ---- Helpers -----------------------------------------------------------------
+
+# Frequency table + plot for a single-choice item
+freq_tab <- function(var, lvls = NULL) {
+  x <- d[[var]]
+  n_ans <- sum(!is.na(x))
+  tb <- tibble(Response = x) |>
+    filter(!is.na(Response)) |>
+    count(Response, name = "n") |>
+    mutate(Percent = n / n_ans)
+  if (!is.null(lvls)) {
+    tb <- tb |> mutate(Response = factor(Response, levels = lvls)) |> arrange(Response)
+  } else {
+    tb <- tb |> arrange(desc(n))
+  }
+  attr(tb, "n_ans") <- n_ans
+  tb
+}
+
+show_tab <- function(tb, caption = NULL) {
+  n_ans <- attr(tb, "n_ans")
+  tb |>
+    mutate(Percent = percent(Percent, accuracy = 0.1)) |>
+    kable(caption = caption) |>
+    kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE) |>
+    footnote(general = sprintf("Answered: %d of %d respondents (%s item nonresponse).",
+                               n_ans, N, percent(1 - n_ans / N, accuracy = 1)),
+             general_title = "")
+}
+
+bar_single <- function(tb, title, wrap = 40) {
+  tb |>
+    mutate(Response = str_wrap(as.character(Response), wrap),
+           Response = factor(Response, levels = rev(str_wrap(as.character(tb$Response), wrap)))) |>
+    ggplot(aes(x = Percent, y = Response)) +
+    geom_col(fill = fill_col) +
+    geom_text(aes(label = percent(Percent, accuracy = 1)), hjust = -0.15, size = 3.4) +
+    scale_x_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.12))) +
+    labs(title = str_wrap(title, 85),
+         subtitle = sprintf("n = %d respondents answering", attr(tb, "n_ans")),
+         x = "Percent of respondents answering", y = NULL)
+}
+
+# Multi-select items: options are concatenated with commas, but many option
+# texts themselves contain commas. We therefore match full canonical option
+# strings (longest first, removing each match so no option can double-count
+# as a substring of another). The residual check below verifies that every
+# response string is fully accounted for by the canonical lists.
+count_multiselect <- function(var, options) {
+  x <- d[[var]]
+  x <- x[!is.na(x)]
+  n_ans <- length(x)
+  ord <- order(-nchar(options))
+  counts <- integer(length(options))
+  resid <- x
+  for (j in ord) {
+    found <- grepl(options[j], resid, fixed = TRUE)
+    counts[j] <- sum(found)
+    resid[found] <- sub(options[j], "", resid[found], fixed = TRUE)
+  }
+  leftover <- gsub("[, ]", "", resid)
+  tb <- tibble(Option = options, n = counts, Percent = counts / n_ans) |>
+    arrange(desc(n))
+  attr(tb, "n_ans") <- n_ans
+  attr(tb, "unmatched") <- sum(leftover != "")
+  tb
+}
+
+show_ms <- function(tb, caption = NULL) {
+  stopifnot(attr(tb, "unmatched") == 0)  # every response fully parsed
+  n_ans <- attr(tb, "n_ans")
+  tb |>
+    mutate(Percent = percent(Percent, accuracy = 0.1)) |>
+    kable(caption = caption) |>
+    kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE) |>
+    footnote(general = sprintf(
+      "Select-all-that-apply; percentages are of the %d respondents answering this item (%d of %d skipped it).",
+      n_ans, N - n_ans, N), general_title = "")
+}
+
+bar_ms <- function(tb, title, wrap = 55) {
+  tb |>
+    mutate(Option = str_wrap(Option, wrap),
+           Option = fct_reorder(Option, n)) |>
+    ggplot(aes(x = Percent, y = Option)) +
+    geom_col(fill = fill_col) +
+    geom_text(aes(label = percent(Percent, accuracy = 1)), hjust = -0.15, size = 3.2) +
+    scale_x_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.12))) +
+    labs(title = str_wrap(title, 85),
+         subtitle = sprintf("Select all that apply; n = %d respondents answering", attr(tb, "n_ans")),
+         x = "Percent selecting", y = NULL)
+}
+```
+
+```{r option-lists, include=FALSE}
+opts <- list(
+  AIUse_reasons = c(
+    "My institution’s policies",
+    "Desire to improve the quality of my work",
+    "Desire to work more efficiently",
+    "Expand the scope of information and resources that are accessible to me (e.g., learning a new coding language, entering a new sub-discipline)",
+    "Get personalized assistance for work challenges",
+    "Financial cost",
+    "Worried about the perceived loss of integrity by my peers or institution",
+    "Worried about allegations of plagiarism or copyright infringement",
+    "The environmental impact of GenAI infrastructure (e.g., water use, electricity use, carbon emissions)",
+    "Security concerns (e.g. prompt injection, file deletion, agentic access to private data, tokens or passwords)",
+    "Anxiety that using GenAI will inhibit my own learning or skill acquisition",
+    "Lack of protection for my data privacy",
+    "Concerns regarding false results / hallucinations",
+    "Concerns regarding biased algorithmic results",
+    "Other"
+  ),
+  Task_interest = c(
+    "For literature review",
+    "To summarize a relevant article",
+    "To suggest ideas for research",
+    "To validate my approach or methods",
+    "To structure my thoughts (e.g., outlining text, reformatting notes)",
+    "To generate text, which I then edit before incorporating into publishable written work",
+    "To generate administrative text (e.g., emails, meeting notes)",
+    "To provide feedback and edit my written work",
+    "To access and understand research materials not in my native language",
+    "To improve my understanding of a new topic",
+    "To quality control data",
+    "To generate code",
+    "To review code",
+    "To reorganize, refactor, add comments, or tidy existing code",
+    "For statistical analysis",
+    "To generate images, video, music, or other media",
+    "For general workplace productivity (e.g., administrative tasks)",
+    "To generate research data (e.g. computer vision, image or acoustic analysis, natural language processing)",
+    "Other"
+  ),
+  TechSkill_Interest = c(
+    "Responsible use of GenAI",
+    "Using a specialized AI coding assistant such as Codex or Claude Code",
+    "Run a model locally on a personal computer",
+    "Use open-source models",
+    "Use GenAI agents that can complete multi-step tasks",
+    "Run models on institutional or cloud computing resources",
+    "Develop AI-powered applications or tools",
+    "Create custom GPTs, projects, or assistants",
+    "Fine-tune or customize GenAI models",
+    "Prompt Engineering",
+    "Use GenAI tools to connect to external databases",
+    "Use GenAI through an API (e.g., accessing Gemini via its API through your IDE of choice)",
+    "Write scripts that call GenAI models programmatically",
+    "Connect GenAI tools to external software",
+    "Build Retrieval-Augmented Generation (RAG) systems",
+    "Not sure",
+    "Other"
+  ),
+  Training = c(
+    "Self-teaching through short-form online websites / videos (i.e., minutes of content)",
+    "Self-teaching through long-form online websites / videos (i.e., hours of content)",
+    "Through colleagues or peers",
+    "Through social media",
+    "Synchronous virtual workshops (~1-8 hours)",
+    "In-person workshops (~1-8 hours)",
+    "Multi-day short courses",
+    "Formal coursework (e.g., semester/quarter)",
+    "Other"
+  ),
+  PromisingOpps = c(
+    "Automating repetitive manual processes",
+    "Analyzing large or complex datasets (including qualitative text data)",
+    "Offloading administrative burdens and mundane office tasks",
+    "Creating new research tools/software",
+    "Accelerating scientific research progress and breakthrough speeds",
+    "Real-time data analytics and dynamic visualization",
+    "Improving data governance and cataloging",
+    "Generating insights for data-informed decision-making",
+    "Democratizing data and data insights for broader access",
+    "Aiding course design and educational curriculum development",
+    "Developing new, highly specialized ecological models",
+    "Evaluating academic or student work",
+    "Beneficial job transformation",
+    "None (No opportunities associated with using GenAI for research and learning)",
+    "Other"
+  ),
+  Challenges = c(
+    "Lack of transparency from service providers (e.g., data privacy concerns)",
+    "The extreme gravity/severity of the risks associated with GenAI",
+    "The high number of individual risks associated with GenAI",
+    "The rapid pace of GenAI change and development",
+    "Lack of clear industry best practices",
+    "Conflicting opinions on GenAI usage",
+    "Insufficient institutional governance or clear rules",
+    "Unauthorized or unvetted stakeholder/student use",
+    "Lack of time to learn new AI-prompting or tool skills",
+    "Lack of technical GenAI expertise",
+    "Lack of financial budget to secure premium GenAI services",
+    "Inadequate procurement and IT security clearing processes",
+    "Lack of leadership support at my institution",
+    "Lack of access to sufficient computing resources",
+    "No challenges associated with using AI",
+    "Other"
+  ),
+  Prof_Role = c(
+    "Researcher",
+    "Educator / Instructor",
+    "Student",
+    "Data Professional (e.g., Data Scientist, Information Manager)",
+    "Project Manager",
+    "Administrator",
+    "Policy Expert or Advocate",
+    "Other"
+  ),
+  Race_Ethnicity = c(
+    "White / Caucasian",
+    "Asian or Asian American",
+    "Hispanic, Latino/a/x, or Spanish Origin",
+    "Black or African American",
+    "American Indian or Alaska Native",
+    "Native Hawaiian or Other Pacific Islander",
+    "Prefer not to answer",
+    "Other"
+  )
+)
+```
+
+# Executive summary: takeaways for workshop design
+
+```{r summary-stats, include=FALSE}
+use_tb  <- freq_tab("AIUse_Freq", c("Never","Yearly","Monthly","Weekly","Daily"))
+att_tb  <- freq_tab("Gen_Attitude")
+task_tb <- count_multiselect("Task_interest", opts$Task_interest)
+tech_tb <- count_multiselect("TechSkill_Interest", opts$TechSkill_Interest)
+des_tb  <- count_multiselect("Training_Desired", opts$Training)
+rec_tb  <- count_multiselect("Training_Received", opts$Training)
+rsn_tb  <- count_multiselect("AIUse_reasons", opts$AIUse_reasons)
+chal_tb <- count_multiselect("Challenges", opts$Challenges)
+
+pct_of <- function(tb, lvl) {
+  col <- if ("Response" %in% names(tb)) tb$Response else tb$Option
+  percent(tb$Percent[match(lvl, col)], accuracy = 1)
+}
+```
+
+Of the **`r N` survey respondents**, most are researchers in academia (ecology and
+environmental science especially), highly educated, and regular users of data
+science tools. Eight takeaways stand out for the design of an AI in a Day workshop:
+
+1. **The audience is experienced but polarized in AI use.** About 60% of
+   those answering already use GenAI weekly or daily, yet roughly 1 in 5 report
+   *never* using it. Plan tiered or parallel activities so daily users and
+   never-users both get value; a one-speed curriculum will lose one end of the room.
+
+2. **Skepticism is the dominant stance, and a quarter are opposed outright.**
+   The modal attitude is "a mix of caution and enthusiasm," and "Opposed to
+   GenAI" is the second most common response. This is not an audience to
+   evangelize to. Frame the day around critical, evidence-based engagement:
+   what these tools do well, where they fail, and how to verify their output.
+
+3. **Environmental impact is the single most-cited factor affecting use** (74%
+   of those answering), ahead of hallucinations (69%) and worry that AI use
+   will inhibit one's own learning (63%). For environmental scientists this is
+   a values issue as much as a practical one. Address it directly with content
+   on the actual energy/water footprint of inference vs. training, and connect
+   it to the strong expressed interest in local and open-source models.
+
+4. **Code-centric tasks top the learning agenda.** Reviewing code (63%) and
+   generating code (62%) are the most-wanted task applications, followed by
+   refactoring/tidying code, learning new topics, and general productivity.
+   Hands-on coding-assistant exercises should anchor the day, with statistical
+   analysis and literature-review use cases as secondary threads.
+
+5. **"Responsible use of GenAI" is the #1 technical skill interest** (52%),
+   ahead of any specific tool skill. Weave verification, citation, privacy,
+   and disclosure practices through every hands-on module rather than
+   quarantining ethics in a single closing slot.
+
+6. **Prior training is almost entirely informal.** Two-thirds of those who
+   report any training got it from short videos or from colleagues; formal
+   coursework and multi-day courses are rare. Assume no shared vocabulary or
+   mental model of how LLMs work, even among daily users.
+
+7. **The chosen format matches demand.** Synchronous workshops of ~1–8 hours
+   are the most desired training format (virtual 60%, in-person 42% of those
+   answering), exactly the "AI in a Day" footprint. Pair the day with
+   short-form follow-up materials, the self-teaching mode most participants
+   already use.
+
+8. **Institutional context is mostly permissive, and Gemini is the common
+   denominator.** Where policies exist they lean supportive, and the most
+   frequently named institutionally provided tools are Gemini, ChatGPT/ChatGPT
+   Edu, and Copilot. Demos built on widely available tools (or free/open
+   models) will travel better than ones requiring paid subscriptions.
+
+**A caution on generalization:** respondents skew heavily academic (79% higher
+ed), doctorally trained, and self-selected into a survey about AI. Attitude and
+interest profiles for the broader target audience may differ.
+
+# Data notes
+
+- The data file contains **`r N` rows** and no direct identifiers; the ID column
+  is `fake_row` (values 1–`r N`, in order).
+- Empty cells are treated as item nonresponse. Nonresponse grows over the course
+  of the survey (see funnel below), consistent with attrition, so percentages
+  in this report use **respondents answering each item** as the denominator,
+  with the item n shown on every table and figure.
+- Two items in the question lookup table (`AI_tools`, and the three open-ended
+  learning-outcome items `LOs_1`–`LOs_3`) do not appear in the response file,
+  so they are not analyzed here.
+- Multi-select ("select all that apply") responses are stored as comma-joined
+  strings in which many option texts themselves contain commas. Options were
+  counted by exact full-string matching against the canonical option lists, and
+  a residual check confirms every response string is fully accounted for.
+
+```{r funnel, fig.height=6}
+main_items <- c("AIUse_Freq","AIUse_reasons","Task_interest","TechSkill_Interest",
+                "Training_Received","Training_Desired","Gen_Attitude","PromisingOpps",
+                "Challenges","Policies","Career_Stage","Prof_Role","Work_Sector",
+                "Formal_Ed","Field","DS_Freq","GenAI_Resources","Gender","LGBTQIA",
+                "Race_Ethnicity","Neurodiverse","Caregiver","FirstGen")
+tibble(item = factor(main_items, levels = rev(main_items)),
+       answered = sapply(main_items, function(v) sum(!is.na(d[[v]])))) |>
+  ggplot(aes(x = answered, y = item)) +
+  geom_col(fill = fill_col) +
+  geom_text(aes(label = answered), hjust = -0.2, size = 3.2) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(title = "Respondents answering each item (survey order, top to bottom)",
+       subtitle = sprintf("Total rows in file: %d", N),
+       x = "Respondents answering", y = NULL)
+```
+
+Note that the two items with the lowest response counts, `Training_Received`
+(n = `r sum(!is.na(d$Training_Received))`) and `GenAI_Resources`
+(n = `r sum(!is.na(d$GenAI_Resources))`), are also items where "none" may
+simply have been left blank, so their percentages deserve extra caution.
+
+# Who responded
+
+## Professional role
+
+*`r qtext("Prof_Role")`*
+
+```{r prof-role}
+tb <- count_multiselect("Prof_Role", opts$Prof_Role)
+show_ms(tb)
+bar_ms(tb, "Primary professional role or identity")
+```
+
+## Career stage
+
+*`r qtext("Career_Stage")`*
+
+```{r career}
+lv <- c("Preparation Stage (Currently pursuing a graduate degree)",
+        "Early Career Stage (1–9 years of experience post-degree)",
+        "Mid-Career Stage (10–25 years of experience)",
+        "Mature Career Stage (26+ years of experience)")
+tb <- freq_tab("Career_Stage", lv)
+show_tab(tb)
+bar_single(tb, "Career stage")
+```
+
+## Work sector
+
+*`r qtext("Work_Sector")`*
+
+```{r sector}
+tb <- freq_tab("Work_Sector")
+show_tab(tb)
+bar_single(tb, "Main work sector")
+```
+
+## Formal education
+
+*`r qtext("Formal_Ed")`*
+
+```{r formal-ed}
+lv <- c("4-year undergraduate degree (B.S., B.A., etc.)",
+        "Master’s degree (M.S., M.A., etc.)",
+        "Doctoral degree (Ph.D., Sc.D., etc.)", "Other")
+tb <- freq_tab("Formal_Ed", lv)
+show_tab(tb)
+bar_single(tb, "Highest level of formal education")
+```
+
+## Primary field or discipline
+
+*`r qtext("Field")`*
+
+```{r field}
+tb <- freq_tab("Field")
+show_tab(tb)
+bar_single(tb, "Primary field or discipline")
+```
+
+## Data science frequency
+
+*`r qtext("DS_Freq")`*
+
+```{r ds-freq}
+lv <- c("I do not use data science in my research/role",
+        "Yearly", "Monthly", "Weekly", "Daily")
+tb <- freq_tab("DS_Freq", lv)
+show_tab(tb)
+bar_single(tb, "Frequency of data science use in primary role")
+```
+
+Roughly `r percent(sum(tb$Percent[tb$Response %in% c("Weekly","Daily")]), accuracy = 1)`
+of those answering use data science weekly or daily. This is a technically
+fluent audience; hands-on coding content is viable for most of the room.
+
+# Current GenAI use and attitudes
+
+## Frequency of GenAI use
+
+*`r qtext("AIUse_Freq")`*
+
+```{r aiuse-freq}
+show_tab(use_tb)
+bar_single(use_tb, "How often do you use GenAI tools in your work?")
+```
+
+Use is strikingly bimodal:
+`r percent(sum(use_tb$Percent[use_tb$Response %in% c("Weekly","Daily")]), accuracy = 1)`
+use GenAI at least weekly while `r pct_of(use_tb, "Never")` never use it at all.
+
+## Reasons affecting likelihood of use
+
+*`r qtext("AIUse_reasons")`*
+
+This item mixes motivators (efficiency, quality) and deterrents (environmental
+impact, hallucinations) in one list, so it is best read as "which considerations
+are on respondents' minds."
+
+```{r reasons, fig.height=7}
+show_ms(rsn_tb)
+bar_ms(rsn_tb, "Considerations affecting likelihood of using GenAI for work")
+```
+
+The four most-selected considerations are all concerns rather than motivations.
+Environmental impact leads at `r percent(rsn_tb$Percent[1], accuracy = 1)`.
+
+## General attitude toward GenAI
+
+*`r qtext("Gen_Attitude")`*
+
+```{r attitude}
+lv <- c("Opposed to GenAI", "Cautious", "A mix of caution and enthusiasm",
+        "Indifferent", "Enthusiastic", "Very enthusiastic", "Other")
+tb <- freq_tab("Gen_Attitude", lv)
+show_tab(tb)
+bar_single(tb, "General attitude toward GenAI")
+```
+
+## Attitude by frequency of use
+
+```{r att-by-use, fig.height=5.5}
+att_lv <- c("Opposed to GenAI", "Cautious", "A mix of caution and enthusiasm",
+            "Indifferent", "Enthusiastic", "Very enthusiastic", "Other")
+d |>
+  filter(!is.na(AIUse_Freq), !is.na(Gen_Attitude)) |>
+  mutate(AIUse_Freq = factor(AIUse_Freq, c("Never","Yearly","Monthly","Weekly","Daily")),
+         Gen_Attitude = factor(Gen_Attitude, att_lv)) |>
+  count(AIUse_Freq, Gen_Attitude) |>
+  group_by(AIUse_Freq) |>
+  mutate(p = n / sum(n), n_grp = sum(n)) |>
+  ungroup() |>
+  ggplot(aes(x = AIUse_Freq, y = p, fill = fct_rev(Gen_Attitude))) +
+  geom_col(width = 0.75) +
+  scale_y_continuous(labels = percent_format()) +
+  scale_fill_brewer(palette = "RdYlBu", direction = -1, name = "Attitude") +
+  labs(title = "Attitude toward GenAI, by frequency of use",
+       subtitle = "Column percentages within each use-frequency group",
+       x = "Frequency of GenAI use", y = "Percent within group")
+```
+
+Attitude and use go hand in hand, but caution persists even among frequent
+users; treat "already uses AI daily" and "is sold on AI" as different things.
+
+## Institutional policies
+
+*`r qtext("Policies")`*
+
+```{r policies}
+lv <- c("Very restrictive/opposed", "Somewhat restrictive/opposed", "Neutral",
+        "Somewhat permissive/supportive", "Very permissive/supportive",
+        "There are not any policies or guidelines at my institution", "Other")
+tb <- freq_tab("Policies", lv)
+show_tab(tb)
+bar_single(tb, "Orientation of institutional GenAI policies and guidelines")
+```
+
+## GenAI resources available through the institution (open text)
+
+*`r qtext("GenAI_Resources")`*
+
+```{r resources}
+x <- tolower(d$GenAI_Resources[!is.na(d$GenAI_Resources)])
+n_ans <- length(x)
+kw <- c(Gemini = "gemini", `ChatGPT (incl. ChatGPT Edu)` = "chatgpt|gpt edu",
+        Copilot = "copilot", Claude = "claude", NotebookLM = "notebooklm",
+        Perplexity = "perplexity", `Llama / open models` = "llama|open.?source",
+        `None mentioned` = "^\\s*none|no resources|nothing",
+        `Not sure / unaware` = "not sure|unsure|don't know|dont know|no idea|unaware")
+tb <- tibble(Option = names(kw),
+             n = sapply(kw, function(p) sum(grepl(p, x))),
+             Percent = n / n_ans) |>
+  arrange(desc(n))
+attr(tb, "n_ans") <- n_ans; attr(tb, "unmatched") <- 0
+show_ms(tb, caption = "Keyword mentions in open-text responses")
+bar_ms(tb, "Institutionally available GenAI resources (keyword mentions)")
+```
+
+Open-text mentions, so categories overlap and absence of a mention does not
+imply absence of the resource. Gemini is by far the most commonly named
+institutional resource.
+
+# What they want to learn
+
+## Tasks of interest
+
+*`r qtext("Task_interest")`*
+
+```{r tasks, fig.height=8}
+show_ms(task_tb)
+bar_ms(task_tb, "Tasks respondents want to learn to use GenAI for")
+```
+
+## Technical skills of interest
+
+*`r qtext("TechSkill_Interest")`*
+
+```{r techskills, fig.height=7}
+show_ms(tech_tb)
+bar_ms(tech_tb, "Technical skills respondents want to learn")
+```
+
+## Training already received
+
+*`r qtext("Training_Received")`*
+
+```{r trainrec}
+show_ms(rec_tb)
+bar_ms(rec_tb, "Formats of GenAI training already received")
+```
+
+Only `r sum(!is.na(d$Training_Received))` of `r N` respondents reported any
+training at all, and what exists is dominated by informal self-teaching and
+peer learning.
+
+## Training desired
+
+*`r qtext("Training_Desired")`*
+
+```{r traindes}
+show_ms(des_tb)
+bar_ms(des_tb, "Formats of GenAI training desired")
+```
+
+```{r train-compare, fig.height=5.5}
+bind_rows(rec_tb |> mutate(which = "Received"),
+          des_tb |> mutate(which = "Desired")) |>
+  mutate(Option = str_wrap(Option, 45)) |>
+  mutate(Option = fct_reorder(Option, Percent, .fun = max)) |>
+  ggplot(aes(x = Percent, y = Option, fill = which)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_x_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.08))) +
+  scale_fill_manual(values = c(Received = "grey70", Desired = fill_col), name = NULL) +
+  labs(title = "Training received vs. training desired, by format",
+       subtitle = sprintf("Percent of respondents answering each item (received n = %d, desired n = %d)",
+                          attr(rec_tb, "n_ans"), attr(des_tb, "n_ans")),
+       x = "Percent selecting", y = NULL)
+```
+
+The gap between received and desired training is largest for structured,
+synchronous formats (virtual and in-person workshops, multi-day courses),
+while social media is the one format people have used more than they want.
+
+# Opportunities and challenges
+
+## Most promising opportunities
+
+*`r qtext("PromisingOpps")`*
+
+```{r opps, fig.height=7}
+tb <- count_multiselect("PromisingOpps", opts$PromisingOpps)
+show_ms(tb)
+bar_ms(tb, "Most promising opportunities for GenAI in research and learning")
+```
+
+Note that `r percent(tb$Percent[tb$Option == "None (No opportunities associated with using GenAI for research and learning)"], accuracy = 1)`
+selected "None," consistent with the sizable opposed group on the attitude item.
+
+## Most difficult challenges
+
+*`r qtext("Challenges")`*
+
+```{r challenges, fig.height=7}
+show_ms(chal_tb)
+bar_ms(chal_tb, "Most difficult challenges for GenAI in research and learning")
+```
+
+# Demographics
+
+## Gender
+
+*`r qtext("Gender")`*
+
+```{r gender}
+tb <- freq_tab("Gender")
+show_tab(tb)
+bar_single(tb, "Gender identity")
+```
+
+## LGBTQIA+ identification
+
+*`r qtext("LGBTQIA")`*
+
+```{r lgbtq}
+tb <- freq_tab("LGBTQIA")
+show_tab(tb)
+```
+
+## Race and ethnicity
+
+*`r qtext("Race_Ethnicity")`*
+
+```{r race}
+tb <- count_multiselect("Race_Ethnicity", opts$Race_Ethnicity)
+show_ms(tb)
+bar_ms(tb, "Racial or ethnic identification (select all that apply)")
+```
+
+## Neurodivergence, caregiving, and first-generation status
+
+```{r other-demo}
+tb <- freq_tab("Neurodiverse")
+show_tab(tb, caption = qtext("Neurodiverse"))
+
+lv <- c("Not a caregiver", "Caregiver in the past, but not currently",
+        "Contributor/Secondary caregiver",
+        "Share caregiving responsibilities equally with another person",
+        "Primary caregiver", "Prefer not to answer")
+tb <- freq_tab("Caregiver", lv)
+show_tab(tb, caption = qtext("Caregiver"))
+
+tb <- freq_tab("FirstGen")
+show_tab(tb, caption = qtext("FirstGen"))
+```
+
+About one in three of those answering identify as a current caregiver of some
+kind, and about one in four identify as neurodivergent or as having a
+significant sensory or mobility challenge. Both argue for accessible pacing,
+recordings or asynchronous follow-ups, and breaks in a day-long format.
