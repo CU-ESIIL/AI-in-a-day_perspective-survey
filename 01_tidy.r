@@ -14,8 +14,7 @@ librarian::shelf(tidyverse, psych, janitor, supportR, sf, rnaturalearth)
 source(file.path("-setup.r"))
 
 # Clear environment/collect garbage
-rm(list = ls())
-gc()
+rm(list = ls()); gc()
 
 ## -------------------------------------------- ##
 # Load Data ----
@@ -126,11 +125,13 @@ svy_v02 <- svy_v01 %>%
   dplyr::left_join(
     x = .,
     y = (svy_v01 %>%
-      dplyr::select(ResponseId, StartDate:ConsentQ)), by = join_by(ResponseId)
+      dplyr::select(ResponseId, StartDate:ConsentQ)), 
+        by = dplyr::join_by(ResponseId)
   )
 
-psych::multi.hist(as.numeric(svy_v02$Q_RecaptchaScore))
-psych::multi.hist(as.numeric(svy_v02$Duration..in.seconds.))
+# Check Captcha scores & survey duration to identify likely bots
+# psych::multi.hist(as.numeric(svy_v02$Q_RecaptchaScore))
+# psych::multi.hist(as.numeric(svy_v02$Duration..in.seconds.))
 
 ## -------------------------------------------- ##
 # Add Countries ----
@@ -186,22 +187,25 @@ svy_v05 <- svy_v04 %>%
     .cols = dplyr::where(fn = is.character),
     .fns = ~ dplyr::case_when(
       . == "Prefer to self-identify:" ~ "Prefer to self-identify",
-      TRUE ~ .
-    )
-  ))
+      TRUE ~ .) ))
 
 # Check structure
 dplyr::glimpse(svy_v05)
 
 ## -------------------------------------------- ##
-# Remove unnecessary info ----
+# Remove Unnecessary Info ----
 ## -------------------------------------------- ##
+
+# Remove empty spaces / unneeded info
 svy_v06 <- svy_v05 %>%
-  mutate(across(where(is.character), ~ na_if(trimws(.), ""))) %>%
+  dplyr::mutate(dplyr::across(dplyr::where(is.character), ~ dplyr::na_if(trimws(.), ""))) %>%
   # remove identifying info
   janitor::remove_empty("cols") %>%
   dplyr::select(-IPAddress, -LocationLatitude, -LocationLongitude, -UserLanguage) %>%
   janitor::remove_constant()
+
+# Check structure
+dplyr::glimpse(svy_v06)
 
 ## -------------------------------------------- ##
 # Export Outputs ----
@@ -214,15 +218,11 @@ svy_v99 <- svy_v06
 dplyr::glimpse(svy_v99)
 
 # Export locally
-write.csv(
-  x = svy_v99, row.names = FALSE, na = "",
-  file = file.path("data", "01_tidied-responses.csv")
-)
+write.csv(x = svy_v99, row.names = FALSE, na = "",
+  file = file.path("data", "01_tidied-responses.csv"))
 
 # Export question lookup
-write.csv(
-  x = lookup, row.names = FALSE, na = "",
-  file = file.path("data", "01_question-lookup-table.csv")
-)
+write.csv(x = lookup, row.names = FALSE, na = "",
+  file = file.path("data", "01_question-lookup-table.csv"))
 
 # End ----
