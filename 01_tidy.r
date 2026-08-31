@@ -213,12 +213,37 @@ dplyr::glimpse(svy_v07)
 # Redact Identifying Info in Free Text Cols ----
 ## -------------------------------------------- ##
 
+# Identify all free text columns
+free_cols <- c("AI_tools", "AIUse_reasons_15_TEXT", 
+  paste0("LOs_", 1:3), "Challenges_15_TEXT", "Field_8_TEXT", "Formal_Ed_4_TEXT", "Gen_Attitude_21_TEXT",
+  "Policies_8_TEXT", "Prof_Role_8_TEXT", "PromisingOpps_14_TEXT", "Task_interest_19_TEXT", "GenAI_Resources",
+  "TechSkill_Interest_15_TEXT", "Training_Desired_9_TEXT", "Training_Received_9_TEXT", "Work_Sector_5_TEXT",
+  "Gender_4_TEXT", "Race_Ethnicity_7_TEXT")
+
+# Check that's all the columns
+supportR::diff_check(old = names(svy_v07), new = free_cols)
+
 # Remove identifying information from free text columns
-svy_v08 <- svy_v07
-
-
-
-
+svy_v08 <- svy_v07 %>% 
+  dplyr::mutate(dplyr::across(.cols = dplyr::all_of(free_cols),
+    .fns = ~ dplyr::case_when(
+      stringr::str_detect(string = ., 
+        pattern = "UCSB AI@Work Training") ~ gsub(pattern = "UCSB AI@Work Training", replacement = "[institutional AI certificate program]", x = .),
+      stringr::str_detect(., "STEM Career Center") ~ gsub("STEM Career Center", "[career center]", x = .),
+      stringr::str_detect(., "UCSB|UMass|Yale|CSU") ~ gsub("UCSB|UMass|Yale|CSU", "[institution]", x = .),
+      stringr::str_detect(., "research from MEDS") ~ gsub("MEDS", "[graduate program]", x = .),
+      stringr::str_detect(., "March 2026") ~ gsub("March 2026", "[date]", x = .),
+      stringr::str_detect(., "CIT AI Gateway|CreateAI Builder") ~ gsub("CIT AI Gateway|CreateAI Builder", "[institutional AI access]", x = .),
+      stringr::str_detect(., "governors state-university-wide program") ~ gsub("governors state-university-wide program", "[state-level program]", x = .),
+      stringr::str_detect(., "CREDIT and Earth2Studio|Earth2Studio and CREDIT") ~ gsub("CREDIT", "[institutional AI tool]", x = .),
+      # stringr::str_detect(., "") ~ gsub("", "[]", x = .),
+      TRUE ~ .))) %>% 
+  dplyr::mutate(dplyr::across(.cols = dplyr::all_of(free_cols),
+    .fns = ~ dplyr::case_when(
+      stringr::str_detect(., "Environmental Markets Lab") ~ gsub("Environmental Markets Lab", "[research lab]", x = .),
+      stringr::str_detect(., "AI-related recommendations for administration, considerations for faculty, our values statement, some results of a faculty survey we conducted last year, and a bibliography of helpful sources about AI.") ~ gsub("AI-related recommendations for administration, considerations for faculty, our values statement, some results of a faculty survey we conducted last year, and a bibliography of helpful sources about AI.", "[quote]", x = .),
+      # stringr::str_detect(., "") ~ gsub("", "[]", x = .),
+      TRUE ~ .)))
 
 # Check structure
 dplyr::glimpse(svy_v08)
@@ -246,19 +271,19 @@ write.csv(x = lookup, row.names = FALSE, na = "",
 ## -------------------------------------------- ##
 
 # Ditch free text columns (too identifiable)
-svy_v07 <- svy_v06 %>% 
+svy_v09 <- svy_v08 %>% 
   dplyr::select(-dplyr::ends_with("_TEXT", ignore.case = FALSE)) %>% 
   dplyr::select(-dplyr::starts_with("LOs_", ignore.case = FALSE)) %>% 
   dplyr::select(-ResponseId, -AI_tools)
 
 # What is lost?
-supportR::diff_check(old = names(svy_v06), new = names(svy_v07))
+supportR::diff_check(old = names(svy_v08), new = names(svy_v09))
 
 # Check structure
-dplyr::glimpse(svy_v07)
+dplyr::glimpse(svy_v09)
 
 # Export question lookup
-write.csv(x = svy_v07, row.names = FALSE, na = "",
+write.csv(x = svy_v09, row.names = FALSE, na = "",
   file = file.path("data", "01_tidied-responses_no-free-text.csv"))
 
 # End ----
