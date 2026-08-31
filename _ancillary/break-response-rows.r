@@ -20,7 +20,7 @@ purrr::walk(.x = dir(path = file.path("tools"),
   .f = ~ source(file = .x))
 
 # Read in data
-fake_v01 <- read.csv(file.path("data", "01_tidied-responses.csv")) %>% 
+fake_v01 <- read.csv(file.path("data", "01_tidied-responses_no-free-text.csv")) %>% 
   dplyr::mutate(dplyr::across(.cols = dplyr::everything(),
     .fns = ~ ifelse(nchar(.) == 0, yes = NA, no = .)))
 
@@ -28,50 +28,34 @@ fake_v01 <- read.csv(file.path("data", "01_tidied-responses.csv")) %>%
 dplyr::glimpse(fake_v01)
 
 ## -------------------------------------------- ##
-# Remove Text Columns ----
-## -------------------------------------------- ##
-
-# Ditch free text columns (too identifiable)
-fake_v02 <- fake_v01 %>% 
-  dplyr::select(-dplyr::ends_with("_TEXT", ignore.case = FALSE)) %>% 
-  dplyr::select(-dplyr::starts_with("LOs_", ignore.case = FALSE)) %>% 
-  dplyr::select(-ResponseId, -AI_tools)
-
-# What is lost?
-supportR::diff_check(old = names(fake_v01), new = names(fake_v02))
-
-# Check structure
-dplyr::glimpse(fake_v02)
-
-## -------------------------------------------- ##
 # Break Row Association ----
 ## -------------------------------------------- ##
 
 # Make a new object
-fake_v03 <- data.frame("fake_row" = 1:nrow(fake_v02))
+fake_v02 <- data.frame("fake_row" = 1:nrow(fake_v01))
 
 # Loop across columns
-for(col in names(fake_v02)){
+for(col in names(fake_v01)){
   # col <- "FirstGen__value"
 
   # Progress message
   message("Breaking row relationship for '", col, "'")
 
   # Randomize the order
-  col_rand <- sample(x = fake_v02[[col]], size = length(fake_v02[[col]]), replace = FALSE)
+  col_rand <- sample(x = fake_v01[[col]], size = length(fake_v01[[col]]), replace = FALSE)
 
   # Attach it to the fake data
-  fake_v03[[col]] <- col_rand }
+  fake_v02[[col]] <- col_rand }
 
 # Check structure
-dplyr::glimpse(fake_v03)
+dplyr::glimpse(fake_v02)
 
 ## -------------------------------------------- ##
 # Export ----
 ## -------------------------------------------- ##
 
 # Make a final object
-fake_v99 <- fake_v03
+fake_v99 <- fake_v02
 
 # Check structure
 dplyr::glimpse(fake_v99)
