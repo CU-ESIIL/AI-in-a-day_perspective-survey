@@ -239,7 +239,7 @@ svy_v08 <- svy_v07 %>%
   dplyr::relocate(dplyr::starts_with("Neurodiverse"), .before = Caregiver) %>%
   dplyr::relocate(dplyr::starts_with("Caregiver"), .before = FirstGen) %>%
   dplyr::relocate(dplyr::starts_with("FirstGen"), .after = dplyr::everything()) %>% 
-  dplyr::relocate(ResponseId, Progress:Q_RecaptchaScore, .before = dplyr::everything())
+  dplyr::relocate(ResponseId, Progress:Q_RecaptchaScore, Country, .before = dplyr::everything())
 
 # Check structure
 dplyr::glimpse(svy_v08)
@@ -267,19 +267,20 @@ write.csv(x = lookup, row.names = FALSE, na = "",
 ## -------------------------------------------- ##
 
 # Ditch free text columns (too identifiable)
-svy_v09 <- svy_v08 %>% 
+svy_notxt <- svy_v99 %>% 
   dplyr::select(-dplyr::ends_with("_TEXT", ignore.case = FALSE)) %>% 
   dplyr::select(-dplyr::starts_with("LOs_", ignore.case = FALSE)) %>% 
-  dplyr::select(-ResponseId, -AI_tools)
+  dplyr::select(-ResponseId, -AI_tools, -GenAI_Resources)
 
 # What is lost?
-supportR::diff_check(old = names(svy_v08), new = names(svy_v09))
+supportR::diff_check(old = names(svy_v08), new = names(svy_notxt))
 
 # Check structure
-dplyr::glimpse(svy_v09)
+names(svy_notxt)
+dplyr::glimpse(svy_notxt)
 
 # Export question lookup
-write.csv(x = svy_v09, row.names = FALSE, na = "",
+write.csv(x = svy_notxt, row.names = FALSE, na = "",
   file = file.path("data", "01_tidied-responses_no-free-text.csv"))
 
 # End ----
