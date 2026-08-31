@@ -225,4 +225,24 @@ write.csv(x = svy_v99, row.names = FALSE, na = "",
 write.csv(x = lookup, row.names = FALSE, na = "",
   file = file.path("data", "01_question-lookup-table.csv"))
 
+## -------------------------------------------- ##
+# Remove Text Columns ----
+## -------------------------------------------- ##
+
+# Ditch free text columns (too identifiable)
+svy_v07 <- svy_v06 %>% 
+  dplyr::select(-dplyr::ends_with("_TEXT", ignore.case = FALSE)) %>% 
+  dplyr::select(-dplyr::starts_with("LOs_", ignore.case = FALSE)) %>% 
+  dplyr::select(-ResponseId, -AI_tools)
+
+# What is lost?
+supportR::diff_check(old = names(svy_v06), new = names(svy_v07))
+
+# Check structure
+dplyr::glimpse(svy_v07)
+
+# Export question lookup
+write.csv(x = svy_v07, row.names = FALSE, na = "",
+  file = file.path("data", "01_tidied-responses_no-free-text.csv"))
+
 # End ----
