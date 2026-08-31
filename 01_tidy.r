@@ -110,16 +110,11 @@ svy_v02 <- svy_v01 %>%
   dplyr::filter(Q_RecaptchaScore > 0 & !is.na(Q_RecaptchaScore)) %>% # PLACEHOLDER!
   dplyr::filter(Duration..in.seconds. > 0) %>% # PLACEHOLDER!
   dplyr::relocate(ResponseId, .before = dplyr::everything()) %>%
-  dplyr::select(-StartDate:-ConsentQ) %>%
-  filter(!if_all(-ResponseId, ~ . == "" | is.na(.))) %>%
-  dplyr::left_join(x = .,
-    y = (svy_v01 %>%
-      dplyr::select(ResponseId, StartDate:ConsentQ)), 
-        by = dplyr::join_by(ResponseId))
+  dplyr::select(-StartDate:-IPAddress, -Finished:-ExternalReference, -DistributionChannel, -UserLanguage) %>%
+  filter(!if_all(-ResponseId, ~ . == "" | is.na(.)))
 
-# Check Captcha scores & survey duration to identify likely bots
-# psych::multi.hist(as.numeric(svy_v02$Q_RecaptchaScore))
-# psych::multi.hist(as.numeric(svy_v02$Duration..in.seconds.))
+# Check lost columns
+supportR::diff_check(old = names(svy_v01), new = names(svy_v02))
 
 # Check structure
 dplyr::glimpse(svy_v02)
@@ -144,34 +139,11 @@ svy_v03 <- sf::st_join(svy_spatial, world_map %>% dplyr::select(name),
 dplyr::glimpse(svy_v03)
 
 ## -------------------------------------------- ##
-# Reorder Columns ----
-## -------------------------------------------- ##
-
-# Get columns into intuitive order
-svy_v04 <- svy_v03 %>%
-  dplyr::relocate(dplyr::starts_with("AIUse_Freq"), .after = ResponseId) %>%
-  dplyr::relocate(dplyr::starts_with("Gen_Attitude"), .after = LOs_3) %>%
-  dplyr::relocate(dplyr::starts_with("Policies"), .before = Career_Stage) %>%
-  dplyr::relocate(dplyr::starts_with("Career_Stage"), .before = Prof_Role) %>%
-  dplyr::relocate(dplyr::starts_with("Work_Sector"), .before = Formal_Ed) %>%
-  dplyr::relocate(dplyr::starts_with("Formal_Ed"), .before = Field) %>%
-  dplyr::relocate(dplyr::starts_with("Field"), .before = DS_Freq) %>%
-  dplyr::relocate(dplyr::starts_with("DS_Freq"), .before = GenAI_Resources) %>%
-  dplyr::relocate(dplyr::starts_with("Gender"), .after = GenAI_Resources) %>%
-  dplyr::relocate(dplyr::starts_with("LGBTQIA"), .before = Race_Ethnicity) %>%
-  dplyr::relocate(dplyr::starts_with("Neurodiverse"), .before = Caregiver) %>%
-  dplyr::relocate(dplyr::starts_with("Caregiver"), .before = FirstGen) %>%
-  dplyr::relocate(dplyr::starts_with("FirstGen"), .after = dplyr::everything())
-
-# Check structure
-dplyr::glimpse(svy_v04)
-
-## -------------------------------------------- ##
 # Streamline Categories ----
 ## -------------------------------------------- ##
 
 # For visualization purposes, we want some of the category names to be simplified
-svy_v05 <- svy_v04 %>%
+svy_v04 <- svy_v03 %>%
   dplyr::mutate(dplyr::across(.cols = dplyr::where(fn = is.character),
     .fns = ~ gsub(pattern = "Other \\(please specify\\)", replacement = "Other", x = .) )) %>%
   dplyr::mutate(dplyr::across(.cols = dplyr::where(fn = is.character),
@@ -180,34 +152,34 @@ svy_v05 <- svy_v04 %>%
       TRUE ~ .) ))
 
 # Check structure
-dplyr::glimpse(svy_v05)
+dplyr::glimpse(svy_v04)
 
 ## -------------------------------------------- ##
 # Remove Unnecessary Info ----
 ## -------------------------------------------- ##
 
 # Remove empty spaces / unneeded info
-svy_v06 <- svy_v05 %>%
+svy_v05 <- svy_v04 %>%
   dplyr::mutate(dplyr::across(dplyr::where(is.character), ~ dplyr::na_if(trimws(.), ""))) %>%
   # remove identifying info
   janitor::remove_empty("cols") %>%
-  dplyr::select(-IPAddress, -LocationLatitude, -LocationLongitude, -UserLanguage) %>%
+  dplyr::select(-LocationLatitude, -LocationLongitude) %>%
   janitor::remove_constant()
 
 # Check structure
-dplyr::glimpse(svy_v06)
+dplyr::glimpse(svy_v05)
 
 ## -------------------------------------------- ##
 # Collapse Free Text to Categories ----
 ## -------------------------------------------- ##
 
 # Some free text answers basically fit a category option, fix those here
-svy_v07 <- svy_v06
+svy_v06 <- svy_v05
 
 
 
 # Check structure
-dplyr::glimpse(svy_v07)
+dplyr::glimpse(svy_v06)
 
 ## -------------------------------------------- ##
 # Redact Identifying Info in Free Text Cols ----
@@ -221,10 +193,10 @@ free_cols <- c("AI_tools", "AIUse_reasons_15_TEXT",
   "Gender_4_TEXT", "Race_Ethnicity_7_TEXT")
 
 # Check that's all the columns
-supportR::diff_check(old = names(svy_v07), new = free_cols)
+supportR::diff_check(old = names(svy_v06), new = free_cols)
 
 # Remove identifying information from free text columns
-svy_v08 <- svy_v07 %>% 
+svy_v07 <- svy_v06 %>% 
   dplyr::mutate(dplyr::across(.cols = dplyr::all_of(free_cols),
     .fns = ~ dplyr::case_when(
       stringr::str_detect(string = ., 
@@ -244,6 +216,30 @@ svy_v08 <- svy_v07 %>%
       stringr::str_detect(., "AI-related recommendations for administration, considerations for faculty, our values statement, some results of a faculty survey we conducted last year, and a bibliography of helpful sources about AI.") ~ gsub("AI-related recommendations for administration, considerations for faculty, our values statement, some results of a faculty survey we conducted last year, and a bibliography of helpful sources about AI.", "[quote]", x = .),
       # stringr::str_detect(., "") ~ gsub("", "[]", x = .),
       TRUE ~ .)))
+
+# Check structure
+dplyr::glimpse(svy_v07)
+
+## -------------------------------------------- ##
+# Reorder Columns ----
+## -------------------------------------------- ##
+
+# Get columns into intuitive order
+svy_v08 <- svy_v07 %>%
+  dplyr::relocate(dplyr::starts_with("AIUse_Freq"), .after = ResponseId) %>%
+  dplyr::relocate(dplyr::starts_with("Gen_Attitude"), .after = LOs_3) %>%
+  dplyr::relocate(dplyr::starts_with("Policies"), .before = Career_Stage) %>%
+  dplyr::relocate(dplyr::starts_with("Career_Stage"), .before = Prof_Role) %>%
+  dplyr::relocate(dplyr::starts_with("Work_Sector"), .before = Formal_Ed) %>%
+  dplyr::relocate(dplyr::starts_with("Formal_Ed"), .before = Field) %>%
+  dplyr::relocate(dplyr::starts_with("Field"), .before = DS_Freq) %>%
+  dplyr::relocate(dplyr::starts_with("DS_Freq"), .before = GenAI_Resources) %>%
+  dplyr::relocate(dplyr::starts_with("Gender"), .after = GenAI_Resources) %>%
+  dplyr::relocate(dplyr::starts_with("LGBTQIA"), .before = Race_Ethnicity) %>%
+  dplyr::relocate(dplyr::starts_with("Neurodiverse"), .before = Caregiver) %>%
+  dplyr::relocate(dplyr::starts_with("Caregiver"), .before = FirstGen) %>%
+  dplyr::relocate(dplyr::starts_with("FirstGen"), .after = dplyr::everything()) %>% 
+  dplyr::relocate(ResponseId, Progress:Q_RecaptchaScore, .before = dplyr::everything())
 
 # Check structure
 dplyr::glimpse(svy_v08)
