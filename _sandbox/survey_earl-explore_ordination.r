@@ -28,10 +28,13 @@
 #' must have a one-to-one mapping. Qualtrics codes for nominal variables are not
 #' treated as measurements.
 #'
-#' The active variables describe AI use, attitudes, opportunities, challenges,
-#' and learning interests. Career and demographic variables are supplementary:
-#' they can help describe an ordination or profile after fitting, but they do
-#' not define respondent distances or profiles.
+#' Every substantive response column represented in the de-identified fixture
+#' contributes to respondent dissimilarity. Identifiers and duplicate
+#' `__value` companions are excluded. Career and demographic questions therefore
+#' define distances alongside AI use, attitudes, opportunities, challenges, and
+#' learning interests. This broad analysis should eventually be compared with a
+#' learning-focused sensitivity analysis because demographic differences can
+#' otherwise influence the resulting profiles.
 #'
 #' PCoA is the primary display because it is deterministic. `stats::cmdscale()`
 #' adds a constant to make the Gower dissimilarities Euclidean before extracting
@@ -52,13 +55,16 @@
 #' The de-identified `broken-row-survey-data.csv` has independently shuffled
 #' columns. Fake mode is therefore only a structural test of parsing, missing
 #' data handling, ordination, and output generation. Coordinates, associations,
-#' profiles, pairing-audit failures, and fitted supplementary variables from
-#' fake mode have no substantive meaning.
+#' profiles, and pairing-audit failures from fake mode have no substantive
+#' meaning.
 #'
 #' Real mode uses intact respondent rows from `01_tidied-responses.csv`. Only
-#' outputs from real mode may be interpreted. Free-response fields are excluded
-#' from this workflow; text-only and text-enriched workflows should be developed
-#' separately after an approved codebook and privacy procedure are established.
+#' outputs from real mode may be interpreted. The active schema is defined by
+#' all substantive fields available in the fake structural fixture. Additional
+#' free-response fields found only in real data remain excluded until a codebook
+#' and privacy procedure are established. `GenAI_Resources`, which is present in
+#' the fixture, is included as an exact-response nominal category; this preserves
+#' the column without claiming to have semantically coded its contents.
 #'
 #' @section Configuration:
 #' Configuration uses environment variables so the script remains unchanged
@@ -69,7 +75,15 @@
 #' * `AI_DAY_QUESTION_LOOKUP`: optional path overriding
 #'   `data/01_question-lookup-table.csv`. When the lookup exists, its schema,
 #'   uniqueness, and coverage of configured questions are validated.
-#' * `AI_DAY_MIN_BLOCKS`: minimum answered active questions (default: 7 of 11).
+#' * `AI_DAY_EXCLUDE_OPPOSED`: `true` removes respondents whose
+#'   `Gen_Attitude` response is exactly `Opposed to GenAI`; otherwise all
+#'   attitudes are retained (default). Missing attitudes are retained.
+#' * `AI_DAY_ANALYSIS_SCOPE`: `all-substantive` includes all 23 substantive
+#'   fixture questions (default); `ai-focused` includes only 11 questions
+#'   directly concerning GenAI use, attitudes, policies/resources,
+#'   opportunities/challenges, training, and learning interests.
+#' * `AI_DAY_MIN_BLOCKS`: minimum answered active questions. The default is 15
+#'   for `all-substantive` and 7 for `ai-focused`.
 #' * `AI_DAY_MIN_OPTION_N`: selections required to retain a checkbox option
 #'   separately; rarer options are pooled within question (default: 5).
 #' * `AI_DAY_STABILITY_RUNS`: 80-percent subsamples per candidate profile count
@@ -85,15 +99,17 @@
 #' @section Outputs:
 #' Intermediate and diagnostic tables are retained as named R objects rather
 #' than written to disk. These include `pairing_audit`, `feature_dictionary`,
-#' `question_completion`, `fit_statistics`, `pcoa_eigenvalues`,
+#' `question_weight_audit`, `question_completion`, `fit_statistics`,
+#' `pcoa_eigenvalues`,
 #' `active_feature_vectors`, `question_associations`, `profile_diagnostics`,
-#' `ordination_scores`, `profile_feature_summary`, and, when available,
-#' `supplementary_statistics` and `supplementary_centroids`.
+#' `ordination_scores`, and `profile_feature_summary`.
 #'
 #' Only figures with interpretive labels are written beneath `graphs_fake/` or
 #' `graphs/`: filtered biplots, corrected PCoA and NMDS diagnostics, a
-#' respondent-comparability plot, question-level associations, supplementary
-#' category centroids, profile diagnostics, and a profile response heatmap.
+#' respondent-comparability plot, question-level associations, profile
+#' diagnostics, and a profile response heatmap.
+#' Filenames end in `_all-attitudes.png` or `_exclude-opposed.png`, and every
+#' figure contains the same scenario label, so both configurations can coexist.
 #' Unadorned ordination point clouds are not saved because their axes cannot be
 #' interpreted without fitted feature labels or another explicit diagnostic.
 #'
@@ -163,6 +179,55 @@ purrr::walk(
 # Configuration ----
 ## -------------------------------------------- ##
 
+# User decision guide
+#
+# AI_DAY_REAL_DATA
+#   false (default): use the shuffled structural fixture and write graphs_fake/.
+#   true: use intact respondent data and write graphs/. Only this mode supports
+#     substantive interpretation.
+#
+# AI_DAY_ANALYSIS_SCOPE
+#   all-substantive (default): use all 23 closed-response questions, including
+#     career and demographic characteristics.
+#   ai-focused: use 11 GenAI questions and exclude career and demographics from
+#     distances and profiles. The separate AI-focused script selects this mode.
+#
+# AI_DAY_EXCLUDE_OPPOSED
+#   false (default): retain respondents with every GenAI attitude.
+#   true: remove only respondents coded exactly "Opposed to GenAI". Respondents
+#     with a missing attitude remain eligible.
+#
+# AI_DAY_SURVEY_DATA / AI_DAY_QUESTION_LOOKUP
+#   unset (default): use mode-specific data and data/01_question-lookup-table.csv.
+#   path: override either default with an approved local file.
+#
+# AI_DAY_MIN_BLOCKS
+#   unset (recommended): require 15/23 answered questions for all-substantive or
+#     7/11 for AI-focused.
+#   positive integer: override the completion threshold. Lower values retain
+#     more respondents but produce distances based on less shared information.
+#
+# AI_DAY_MIN_OPTION_N
+#   5 (default): keep checkbox responses selected by at least five respondents;
+#     pool rarer choices within their source question. For nominal questions,
+#     rare categories remain in Gower but are omitted from plotted labels.
+#
+# AI_DAY_STABILITY_RUNS
+#   50 (default): repeated 80-percent subsamples for PAM stability.
+#   2-5: fast development check. 100 or more: recommended for final analysis.
+#
+# AI_DAY_PROFILE_K
+#   unset (default): choose the eligible k = 2,...,8 with best silhouette width.
+#   integer 2,...,8: force that profile count for a sensitivity or planned run.
+#
+# AI_DAY_VECTOR_LABELS
+#   8 (default): label at most eight fitted vectors, one per source question.
+#   positive integer: show fewer for clarity or more for detailed inspection.
+#
+# AI_DAY_SEED
+#   20260831 (default): reproducible NMDS starts, permutations, and subsamples.
+#   non-negative integer: use another reproducible random sequence.
+
 as_flag <- function(x) {
   tolower(trimws(x)) %in% c("1", "true", "t", "yes", "y")
 }
@@ -175,7 +240,26 @@ as_integer_setting <- function(name, default, minimum = 1) {
   value
 }
 
+# Decision: fake fixture versus intact real respondent data.
 real_data <- as_flag(Sys.getenv("AI_DAY_REAL_DATA", unset = "false"))
+
+# Decision: retain all attitudes versus exclude exactly "Opposed to GenAI".
+exclude_opposed <- as_flag(Sys.getenv(
+  "AI_DAY_EXCLUDE_OPPOSED", unset = "false"
+))
+
+# Decision: broad all-substantive profile versus GenAI-only profile.
+analysis_scope <- Sys.getenv(
+  "AI_DAY_ANALYSIS_SCOPE", unset = "all-substantive"
+)
+valid_analysis_scopes <- c("all-substantive", "ai-focused")
+if (!analysis_scope %in% valid_analysis_scopes) {
+  stop(
+    "'AI_DAY_ANALYSIS_SCOPE' must be one of: ",
+    paste(valid_analysis_scopes, collapse = ", ")
+  )
+}
+# Input paths may be overridden without editing this script.
 default_data_path <- if (real_data) {
   file.path("data", "01_tidied-responses.csv")
 } else {
@@ -187,11 +271,27 @@ lookup_path <- Sys.getenv(
   "AI_DAY_QUESTION_LOOKUP",
   unset = file.path("data", "01_question-lookup-table.csv")
 )
-minimum_active_blocks <- as_integer_setting("AI_DAY_MIN_BLOCKS", 7)
+# Completion defaults scale with the number of active question blocks.
+default_minimum_active_blocks <- ifelse(
+  analysis_scope == "ai-focused", 7, 15
+)
+minimum_active_blocks <- as_integer_setting(
+  "AI_DAY_MIN_BLOCKS", default_minimum_active_blocks
+)
+# Rare checkbox options are pooled; rare nominal levels remain analytical but
+# are not promoted to unstable interpretation labels.
 minimum_option_n <- as_integer_setting("AI_DAY_MIN_OPTION_N", 5)
+
+# Stability repetitions trade execution time for precision.
 stability_runs <- as_integer_setting("AI_DAY_STABILITY_RUNS", 50)
+
+# The seed makes stochastic ordination and stability results reproducible.
 analysis_seed <- as_integer_setting("AI_DAY_SEED", 20260831, minimum = 0)
+
+# Limit visual vectors without discarding the complete in-memory fit table.
 vector_label_n <- as_integer_setting("AI_DAY_VECTOR_LABELS", 8)
+
+# Blank selects k diagnostically; an integer forces a candidate profile count.
 profile_k_setting <- Sys.getenv("AI_DAY_PROFILE_K", unset = "")
 
 if (!file.exists(data_path)) {
@@ -202,45 +302,98 @@ if (!file.exists(data_path)) {
   )
 }
 
+# Output routing keeps fake and real figures physically separate.
 graph_path <- ifelse(real_data, "graphs", "graphs_fake")
 dir.create(graph_path, recursive = TRUE, showWarnings = FALSE)
 
-active_ordinal_questions <- c(
-  "AIUse_Freq", "Gen_Attitude", "Policies", "DS_Freq"
+attitude_scenario <- if (exclude_opposed) {
+  "Excluded GenAI attitude: Opposed to GenAI"
+} else {
+  "Included all GenAI attitudes"
+}
+scope_label <- ifelse(
+  analysis_scope == "ai-focused",
+  "AI-focused questions only",
+  "All substantive questions"
+)
+analysis_scenario <- paste(scope_label, attitude_scenario, sep = "; ")
+scenario_suffix <- ifelse(
+  exclude_opposed, "exclude-opposed", "all-attitudes"
+)
+ordination_plot_path <- function(stem) {
+  file.path(
+    graph_path,
+    paste0(
+      "ordination_", analysis_scope, "_", stem, "_",
+      scenario_suffix, ".png"
+    )
+  )
+}
+
+all_ordinal_questions <- c(
+  "AIUse_Freq", "Gen_Attitude", "Policies", "Career_Stage", "Formal_Ed",
+  "DS_Freq"
 )
 
-active_multiselect_questions <- c(
+all_multiselect_questions <- c(
   "AIUse_reasons", "Task_interest", "TechSkill_Interest",
-  "Training_Received", "Training_Desired", "PromisingOpps", "Challenges"
+  "Training_Received", "Training_Desired", "PromisingOpps", "Challenges",
+  "Prof_Role", "Race_Ethnicity"
 )
 
-supplementary_questions <- c(
-  "Career_Stage", "Work_Sector", "Formal_Ed", "Field", "Gender",
-  "LGBTQIA", "Neurodiverse", "Caregiver", "FirstGen"
+all_nominal_questions <- c(
+  "Work_Sector", "Field", "GenAI_Resources", "Gender", "LGBTQIA",
+  "Neurodiverse", "Caregiver", "FirstGen"
 )
 
-configured_questions <- tibble::tibble(
+# Scope decision: classify only questions that actively define Gower distance.
+# Data-science frequency is intentionally omitted from AI-focused mode because
+# it describes broader professional practice rather than GenAI specifically.
+if (analysis_scope == "ai-focused") {
+  active_ordinal_questions <- c(
+    "AIUse_Freq", "Gen_Attitude", "Policies"
+  )
+  active_multiselect_questions <- c(
+    "AIUse_reasons", "Task_interest", "TechSkill_Interest",
+    "Training_Received", "Training_Desired", "PromisingOpps", "Challenges"
+  )
+  active_nominal_questions <- "GenAI_Resources"
+} else {
+  active_ordinal_questions <- all_ordinal_questions
+  active_multiselect_questions <- all_multiselect_questions
+  active_nominal_questions <- all_nominal_questions
+}
+
+all_configured_questions <- tibble::tibble(
   question = c(
-    active_ordinal_questions, active_multiselect_questions,
-    supplementary_questions
+    all_ordinal_questions, all_multiselect_questions,
+    all_nominal_questions
   ),
   question_label = c(
     "GenAI use frequency", "General attitude toward GenAI",
-    "Institutional GenAI policies", "Data science use frequency",
+    "Institutional GenAI policies", "Career stage", "Formal education",
+    "Data science use frequency",
     "Factors affecting GenAI use", "Research task learning interests",
     "Technical skill learning interests", "Training already received",
     "Training desired", "Promising GenAI opportunities",
-    "Challenges using GenAI", "Career stage", "Work sector",
-    "Formal education", "Primary field or discipline", "Gender",
+    "Challenges using GenAI", "Professional role", "Race or ethnicity",
+    "Work sector", "Primary field or discipline",
+    "Institutional GenAI resources", "Gender",
     "LGBTQIA+ identity", "Neurodivergence or accessibility",
     "Caregiving responsibilities", "First-generation college status"
   ),
   analytical_role = c(
-    rep("active ordinal", length(active_ordinal_questions)),
-    rep("active multi-select", length(active_multiselect_questions)),
-    rep("supplementary", length(supplementary_questions))
+    rep("active ordinal", length(all_ordinal_questions)),
+    rep("active multi-select", length(all_multiselect_questions)),
+    rep("active nominal", length(all_nominal_questions))
   )
 )
+
+configured_questions <- all_configured_questions %>%
+  dplyr::filter(question %in% c(
+    active_ordinal_questions, active_multiselect_questions,
+    active_nominal_questions
+  ))
 
 if (file.exists(lookup_path)) {
   question_lookup <- read.csv(
@@ -313,6 +466,18 @@ fallback_ordinal_levels <- list(
   Policies = c(
     "Very restrictive/prohibitive", "Somewhat restrictive/prohibitive",
     "Neutral", "Somewhat permissive/supportive", "Very permissive/supportive"
+  ),
+  Career_Stage = c(
+    "Student / In training", "Early Career Stage (1–9 years of experience post-degree)",
+    "Mid-Career Stage (10–25 years of experience)",
+    "Mature Career Stage (26+ years of experience)"
+  ),
+  Formal_Ed = c(
+    "High school diploma or equivalent",
+    "2-year college degree (A.A., A.S., etc.)",
+    "4-year undergraduate degree (B.S., B.A., etc.)",
+    "Master's degree (M.S., M.A., etc.)",
+    "Doctoral degree (Ph.D., Sc.D., etc.)"
   )
 )
 
@@ -378,6 +543,52 @@ encode_multiselect <- function(x, question, minimum_n = 5) {
   )
 
   list(data = as.data.frame(encoded), dictionary = dictionary)
+}
+
+encode_nominal <- function(x, question) {
+  values <- factor(x)
+  response_options <- levels(values)
+  encoded <- matrix(
+    0L, nrow = length(values), ncol = length(response_options),
+    dimnames = list(NULL, response_options)
+  )
+  missing_response <- is.na(values)
+  encoded[missing_response, ] <- NA_integer_
+
+  for (row_index in which(!missing_response)) {
+    encoded[row_index, as.character(values[row_index])] <- 1L
+  }
+
+  feature_names <- make.unique(paste(question, colnames(encoded), sep = "__"))
+  colnames(encoded) <- feature_names
+
+  distance_dictionary <- tibble::tibble(
+    feature = question,
+    question = question,
+    response_option = NA_character_,
+    measurement = "nominal factor",
+    feature_weight = 1,
+    selected_n = sum(!missing_response),
+    selected_percent = round(100 * mean(!missing_response), 1)
+  )
+  interpretation_dictionary <- tibble::tibble(
+    feature = feature_names,
+    question = question,
+    response_option = response_options,
+    measurement = "nominal category indicator",
+    feature_weight = 1 / length(feature_names),
+    selected_n = colSums(encoded, na.rm = TRUE),
+    selected_percent = round(
+      100 * colSums(encoded, na.rm = TRUE) / sum(!missing_response), 1
+    )
+  )
+
+  list(
+    data = stats::setNames(data.frame(values), question),
+    interpretation_data = as.data.frame(encoded),
+    distance_dictionary = distance_dictionary,
+    interpretation_dictionary = interpretation_dictionary
+  )
 }
 
 audit_value_pair <- function(df, question) {
@@ -521,7 +732,8 @@ survey_v01 <- read.csv(
 required_questions <- c(
   active_ordinal_questions,
   paste0(active_ordinal_questions, "__value"),
-  active_multiselect_questions
+  active_multiselect_questions,
+  active_nominal_questions
 )
 missing_questions <- setdiff(required_questions, names(survey_v01))
 
@@ -529,6 +741,36 @@ if (length(missing_questions) > 0) {
   stop(
     "Required columns are absent: ", paste(missing_questions, collapse = ", ")
   )
+}
+
+input_respondent_n <- nrow(survey_v01)
+opposed_respondent_n <- sum(
+  survey_v01$Gen_Attitude == "Opposed to GenAI", na.rm = TRUE
+)
+
+if (exclude_opposed) {
+  # Keep missing attitudes: absence of an answer is not evidence of opposition.
+  survey_v01 <- survey_v01 %>%
+    dplyr::filter(
+      is.na(Gen_Attitude) | Gen_Attitude != "Opposed to GenAI"
+    )
+}
+excluded_opposed_n <- input_respondent_n - nrow(survey_v01)
+
+if (!real_data && analysis_scope == "all-substantive") {
+  fixture_substantive_questions <- setdiff(
+    names(survey_v01),
+    c("fake_row", grep("__value$", names(survey_v01), value = TRUE))
+  )
+  unclassified_fixture_questions <- setdiff(
+    fixture_substantive_questions, configured_questions$question
+  )
+  if (length(unclassified_fixture_questions) > 0) {
+    stop(
+      "Substantive fixture columns lack an analysis type: ",
+      paste(unclassified_fixture_questions, collapse = ", ")
+    )
+  }
 }
 
 respondent_id_question <- if (real_data) "ResponseId" else "fake_row"
@@ -563,6 +805,9 @@ if (real_data && any(
 # Encode Active Questions ----
 ## -------------------------------------------- ##
 
+# Ordinal questions use response labels ordered by their verified `__value`
+# companion in real mode. Fake mode uses documented fallback order because the
+# independently shuffled companions cannot establish a valid mapping.
 ordinal_data <- purrr::map_dfc(active_ordinal_questions, function(question) {
   result <- prepare_ordinal(
     survey_v01, question, fallback_ordinal_levels[[question]]
@@ -588,11 +833,40 @@ multiselect_encoded <- purrr::map(
 )
 
 multiselect_data <- purrr::map_dfc(multiselect_encoded, "data")
+# Nominal questions enter Gower once as factors. Separate one-hot indicators are
+# created only for fitted vectors and heatmaps; they do not multiply the
+# question's influence on respondent distance.
 multiselect_dictionary <- purrr::map_dfr(multiselect_encoded, "dictionary")
 
-active_data_v01 <- dplyr::bind_cols(ordinal_data, multiselect_data)
+nominal_encoded <- purrr::map(
+  active_nominal_questions,
+  ~ encode_nominal(survey_v01[[.x]], .x)
+)
+nominal_data <- purrr::map_dfc(nominal_encoded, "data")
+nominal_interpretation_data <- purrr::map_dfc(
+  nominal_encoded, "interpretation_data"
+)
+nominal_dictionary <- purrr::map_dfr(
+  nominal_encoded, "distance_dictionary"
+)
+nominal_interpretation_dictionary <- purrr::map_dfr(
+  nominal_encoded, "interpretation_dictionary"
+)
+
+active_data_v01 <- dplyr::bind_cols(
+  ordinal_data, multiselect_data, nominal_data
+)
+interpretation_data_v01 <- dplyr::bind_cols(
+  ordinal_data, multiselect_data, nominal_interpretation_data
+)
 feature_dictionary <- dplyr::bind_rows(
-  ordinal_dictionary, multiselect_dictionary
+  ordinal_dictionary, multiselect_dictionary, nominal_dictionary
+) %>%
+  dplyr::left_join(question_metadata, by = "question") %>%
+  dplyr::relocate(question_label, question_text, .after = question)
+interpretation_dictionary <- dplyr::bind_rows(
+  ordinal_dictionary, multiselect_dictionary,
+  nominal_interpretation_dictionary
 ) %>%
   dplyr::left_join(question_metadata, by = "question") %>%
   dplyr::relocate(question_label, question_text, .after = question)
@@ -611,10 +885,19 @@ multiselect_completion <- as.data.frame(stats::setNames(
   active_multiselect_questions
 ))
 
+nominal_completion <- as.data.frame(stats::setNames(
+  lapply(active_nominal_questions, function(question) {
+    !is.na(survey_v01[[question]])
+  }),
+  active_nominal_questions
+))
+
 question_completion_matrix <- dplyr::bind_cols(
-  active_question_completion, multiselect_completion
+  active_question_completion, multiselect_completion, nominal_completion
 )
 answered_active_blocks <- rowSums(question_completion_matrix)
+
+# Include respondents meeting the scope-specific shared-information threshold.
 included_respondent <- answered_active_blocks >= minimum_active_blocks
 
 question_completion <- tibble::tibble(
@@ -633,6 +916,9 @@ if (sum(included_respondent) < 3) {
 }
 
 active_data <- active_data_v01[included_respondent, , drop = FALSE]
+interpretation_data <- interpretation_data_v01[
+  included_respondent, , drop = FALSE
+]
 respondent_ids <- survey_v01[[respondent_id_question]][included_respondent]
 
 constant_feature <- vapply(active_data, function(x) {
@@ -647,6 +933,47 @@ if (any(constant_feature)) {
   feature_dictionary <- feature_dictionary %>%
     dplyr::mutate(included = TRUE)
 }
+
+feature_dictionary <- feature_dictionary %>%
+  dplyr::group_by(question) %>%
+  dplyr::mutate(
+    feature_weight = dplyr::if_else(
+      included,
+      feature_weight / sum(feature_weight[included]),
+      feature_weight
+    )
+  ) %>%
+  dplyr::ungroup()
+
+# Enforce equal total influence per question after any constant encoded feature
+# is removed. This prevents long checkbox questions from dominating Gower.
+question_weight_audit <- feature_dictionary %>%
+  dplyr::filter(included) %>%
+  dplyr::group_by(question, question_label, question_text) %>%
+  dplyr::summarize(
+    included_feature_n = dplyr::n(),
+    total_gower_weight = sum(feature_weight),
+    .groups = "drop"
+  )
+
+if (
+  nrow(question_weight_audit) != nrow(configured_questions) ||
+    any(abs(question_weight_audit$total_gower_weight - 1) > 1e-10)
+) {
+  stop("Every configured question must contribute total Gower weight one")
+}
+
+constant_interpretation_feature <- vapply(interpretation_data, function(x) {
+  length(unique(x[!is.na(x)])) < 2
+}, logical(1))
+interpretation_dictionary <- interpretation_dictionary %>%
+  dplyr::mutate(
+    included = !feature %in%
+      names(interpretation_data)[constant_interpretation_feature]
+  )
+interpretation_data <- interpretation_data[
+  , !constant_interpretation_feature, drop = FALSE
+]
 
 feature_weights <- feature_dictionary$feature_weight[
   match(names(active_data), feature_dictionary$feature)
@@ -725,14 +1052,17 @@ ordination_scores <- tibble::tibble(
 
 fit_statistics <- tibble::tibble(
   statistic = c(
-    "input_respondents", "included_respondents", "active_questions",
+    "input_respondents", "opposed_respondents_in_input",
+    "excluded_opposed_respondents", "included_respondents", "active_questions",
     "encoded_features", "minimum_answered_questions", "gower_mean",
     "pcoa_additive_constant", "pcoa_axis_1_percent_positive_eigenvalues",
     "pcoa_axis_2_percent_positive_eigenvalues", "nmds_stress"
   ),
   value = c(
-    nrow(survey_v01), sum(included_respondent),
-    length(active_ordinal_questions) + length(active_multiselect_questions),
+    input_respondent_n, opposed_respondent_n, excluded_opposed_n,
+    sum(included_respondent),
+    length(active_ordinal_questions) + length(active_multiselect_questions) +
+      length(active_nominal_questions),
     ncol(active_data), minimum_active_blocks, mean(gower_dissimilarity),
     pcoa_fit$ac, pcoa_axis_percent, nmds_fit$stress
   )
@@ -742,28 +1072,42 @@ fit_statistics <- tibble::tibble(
 # Active Feature Associations ----
 ## -------------------------------------------- ##
 
+association_features <- interpretation_dictionary %>%
+  dplyr::filter(
+    included,
+    measurement == "ordered factor" | selected_n >= minimum_option_n
+  ) %>%
+  dplyr::pull(feature)
+association_data <- interpretation_data[
+  , association_features, drop = FALSE
+]
+
 set.seed(analysis_seed)
 pcoa_feature_vectors <- fit_feature_vectors(
-  pcoa_fit$points, active_data, "PCoA"
+  pcoa_fit$points, association_data, "PCoA"
 )
 set.seed(analysis_seed)
 nmds_feature_vectors <- fit_feature_vectors(
-  nmds_fit$points, active_data, "NMDS"
+  nmds_fit$points, association_data, "NMDS"
 )
 
 active_feature_vectors <- dplyr::bind_rows(
   pcoa_feature_vectors, nmds_feature_vectors
 ) %>%
   dplyr::left_join(
-    feature_dictionary %>%
+    interpretation_dictionary %>%
       dplyr::select(
         feature, question, question_label, question_text, response_option, measurement,
         feature_weight
       ),
     by = "feature"
   ) %>%
-  dplyr::mutate(vector_label = dplyr::if_else(
-    is.na(response_option), question, response_option
+  dplyr::mutate(vector_label = dplyr::case_when(
+    measurement == "ordered factor" ~ question_label,
+    measurement == "nominal category indicator" ~ paste0(
+      question_label, ": ", response_option
+    ),
+    TRUE ~ response_option
   )) %>%
   dplyr::relocate(
     question, question_label, question_text, response_option, measurement,
@@ -833,6 +1177,8 @@ profile_diagnostics <- purrr::map_dfr(candidate_k, function(profile_count) {
   dplyr::left_join(profile_stability, by = "profile_count") %>%
   dplyr::mutate(eligible_profile_size = minimum_profile_percent >= 5)
 
+# Profile-count decision: either select the strongest eligible silhouette result
+# or honor a user-specified k for planned comparisons and sensitivity checks.
 if (profile_k_setting == "") {
   eligible_diagnostics <- profile_diagnostics %>%
     dplyr::filter(eligible_profile_size)
@@ -854,7 +1200,7 @@ if (profile_k_setting == "") {
 selected_profile_fit <- profile_fits[[as.character(selected_profile_k)]]
 ordination_scores$profile <- factor(selected_profile_fit$clustering)
 
-profile_feature_summary <- active_data %>%
+profile_feature_summary <- interpretation_data %>%
   dplyr::mutate(
     dplyr::across(dplyr::where(is.ordered), as.numeric),
     profile = ordination_scores$profile
@@ -869,10 +1215,10 @@ profile_feature_summary <- active_data %>%
     .groups = "drop"
   ) %>%
   dplyr::left_join(
-    feature_dictionary %>%
+    interpretation_dictionary %>%
       dplyr::select(
         feature, question, question_label, question_text, response_option,
-        measurement
+        measurement, selected_n
       ),
     by = "feature"
   ) %>%
@@ -882,14 +1228,14 @@ profile_feature_summary <- active_data %>%
   )
 
 feature_scaling <- tibble::tibble(
-  feature = names(active_data),
-  feature_minimum = vapply(active_data, function(x) {
+  feature = names(interpretation_data),
+  feature_minimum = vapply(interpretation_data, function(x) {
     if (is.ordered(x)) 1 else 0
   }, numeric(1)),
-  feature_maximum = vapply(active_data, function(x) {
+  feature_maximum = vapply(interpretation_data, function(x) {
     if (is.ordered(x)) nlevels(x) else 1
   }, numeric(1)),
-  overall_mean = vapply(active_data, function(x) {
+  overall_mean = vapply(interpretation_data, function(x) {
     mean(if (is.ordered(x)) as.numeric(x) else x, na.rm = TRUE)
   }, numeric(1))
 )
@@ -903,7 +1249,9 @@ profile_heatmap_data <- profile_feature_summary %>%
       (feature_maximum - feature_minimum),
     deviation_from_overall = scaled_profile_mean - scaled_overall_mean,
     display_value = dplyr::if_else(
-      measurement == "asymmetric binary",
+      measurement %in% c(
+        "asymmetric binary", "nominal category indicator"
+      ),
       paste0(round(100 * mean_feature_value), "%"),
       format(round(mean_feature_value, 1), nsmall = 1)
     ),
@@ -917,6 +1265,7 @@ profile_heatmap_data <- profile_feature_summary %>%
   dplyr::ungroup()
 
 profile_heatmap_features <- profile_heatmap_data %>%
+  dplyr::filter(selected_n >= minimum_option_n) %>%
   dplyr::distinct(question, feature, feature_contrast) %>%
   dplyr::group_by(question) %>%
   dplyr::slice_max(feature_contrast, n = 2, with_ties = FALSE) %>%
@@ -929,62 +1278,14 @@ profile_heatmap_data <- profile_heatmap_data %>%
     question_label = factor(
       question_label,
       levels = question_metadata$question_label[
-        match(unique(feature_dictionary$question), question_metadata$question)
+        match(
+          unique(interpretation_dictionary$question),
+          question_metadata$question
+        )
       ]
     ),
     feature_label = stringr::str_wrap(feature_label, width = 38)
   )
-
-## -------------------------------------------- ##
-# Supplementary Variables ----
-## -------------------------------------------- ##
-
-available_supplementary <- intersect(supplementary_questions, names(survey_v01))
-supplementary_data <- survey_v01[included_respondent, available_supplementary,
-  drop = FALSE
-] %>%
-  dplyr::mutate(dplyr::across(dplyr::everything(), factor)) %>%
-  dplyr::select(dplyr::where(~ nlevels(droplevels(.x)) >= 2))
-
-if (ncol(supplementary_data) > 0) {
-  set.seed(analysis_seed)
-  supplementary_fit <- vegan::envfit(
-    nmds_fit, supplementary_data, permutations = 999, na.rm = TRUE
-  )
-
-  supplementary_statistics <- tibble::tibble(
-    variable = names(supplementary_fit$factors$r),
-    r_squared = unname(supplementary_fit$factors$r),
-    permutation_p = unname(supplementary_fit$factors$pvals)
-  ) %>%
-    dplyr::left_join(
-      question_metadata,
-      by = c("variable" = "question")
-    ) %>%
-    dplyr::relocate(question_label, question_text, .after = variable) %>%
-    dplyr::arrange(permutation_p)
-
-  supplementary_centroids <- purrr::map_dfr(
-    names(supplementary_data), function(variable) {
-      tibble::tibble(
-        variable = variable,
-        category = supplementary_data[[variable]],
-        NMDS1 = ordination_scores$NMDS1,
-        NMDS2 = ordination_scores$NMDS2
-      ) %>%
-        dplyr::filter(!is.na(category)) %>%
-        dplyr::group_by(variable, category) %>%
-        dplyr::summarize(
-          respondent_n = dplyr::n(),
-          NMDS1 = mean(NMDS1),
-          NMDS2 = mean(NMDS2),
-          .groups = "drop"
-        )
-    }
-  ) %>%
-    dplyr::left_join(supplementary_statistics, by = "variable")
-
-}
 
 ## -------------------------------------------- ##
 # Figures ----
@@ -999,7 +1300,7 @@ pcoa_graph <- ggplot2::ggplot(
   ggplot2::labs(
     x = paste0("Corrected PCoA 1 (", round(pcoa_axis_percent[1], 1), "%)"),
     y = paste0("Corrected PCoA 2 (", round(pcoa_axis_percent[2], 1), "%)"),
-    color = "Candidate profile"
+    color = "Candidate profile", caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 16)
 
@@ -1047,7 +1348,8 @@ nmds_graph <- ggplot2::ggplot(
   ggplot2::scale_color_viridis_d(option = "C", end = 0.9) +
   ggplot2::labs(
     x = "NMDS 1", y = "NMDS 2", color = "Candidate profile",
-    subtitle = paste0("Stress = ", round(nmds_fit$stress, 3))
+    subtitle = paste0("Stress = ", round(nmds_fit$stress, 3)),
+    caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 16)
 
@@ -1081,7 +1383,8 @@ pcoa_scree_graph <- pcoa_eigenvalues %>%
   ggplot2::scale_x_continuous(breaks = 1:20) +
   ggplot2::labs(
     x = "Corrected PCoA axis",
-    y = "Percent of positive eigenvalues (%)"
+    y = "Percent of positive eigenvalues (%)",
+    caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 16)
 
@@ -1098,7 +1401,8 @@ completeness_graph <- ggplot2::ggplot(
     x = paste0("Corrected PCoA 1 (", round(pcoa_axis_percent[1], 1), "%)"),
     y = paste0("Corrected PCoA 2 (", round(pcoa_axis_percent[2], 1), "%)"),
     color = "Mean shared active\nquestions (%)",
-    size = "Answered active\nquestions"
+    size = "Answered active\nquestions",
+    caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 16)
 
@@ -1115,7 +1419,8 @@ question_association_graph <- ggplot2::ggplot(
   ) +
   ggplot2::scale_color_manual(values = c("NMDS" = "#c44536", "PCoA" = "#00798c")) +
   ggplot2::labs(
-    x = expression("Question-weighted " * R^2), y = "", color = "Ordination"
+    x = expression("Question-weighted " * R^2), y = "", color = "Ordination",
+    caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 16)
 
@@ -1134,7 +1439,8 @@ profile_heatmap_graph <- ggplot2::ggplot(
   ) +
   ggplot2::labs(
     x = "Candidate profile", y = "",
-    fill = "Deviation from\noverall mean"
+    fill = "Deviation from\noverall mean",
+    caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 14) +
   ggplot2::theme(
@@ -1163,88 +1469,57 @@ profile_diagnostic_graph <- profile_diagnostics %>%
   ggplot2::scale_x_continuous(breaks = candidate_k) +
   ggplot2::scale_color_manual(values = c("#00798c", "#c44536")) +
   ggplot2::labs(
-    x = "Candidate number of profiles", y = "Diagnostic value", color = ""
+    x = "Candidate number of profiles", y = "Diagnostic value", color = "",
+    caption = analysis_scenario
   ) +
   supportR::theme_lyon(text_size = 16)
 
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_pcoa-biplot.png"), pcoa_biplot,
+  ordination_plot_path("pcoa-biplot"), pcoa_biplot,
   height = 10, width = 12, units = "in"
 )
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_nmds-biplot.png"), nmds_biplot,
+  ordination_plot_path("nmds-biplot"), nmds_biplot,
   height = 10, width = 12, units = "in"
 )
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_pcoa-scree.png"), pcoa_scree_graph,
+  ordination_plot_path("pcoa-scree"), pcoa_scree_graph,
   height = 7, width = 9, units = "in"
 )
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_pcoa-completeness.png"), completeness_graph,
+  ordination_plot_path("pcoa-completeness"), completeness_graph,
   height = 7, width = 9, units = "in"
 )
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_question-associations.png"),
+  ordination_plot_path("question-associations"),
   question_association_graph, height = 8, width = 10, units = "in"
 )
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_profile-response-heatmap.png"),
+  ordination_plot_path("profile-response-heatmap"),
   profile_heatmap_graph,
   height = max(10, length(profile_heatmap_features) * 0.48),
   width = 14, units = "in"
 )
 ggplot2::ggsave(
-  file.path(graph_path, "ordination_profile-diagnostics.png"),
+  ordination_plot_path("profile-diagnostics"),
   profile_diagnostic_graph, height = 7, width = 9, units = "in"
 )
 
-if (exists("supplementary_centroids")) {
-  strongest_supplementary <- supplementary_statistics$variable[1]
-  strongest_supplementary_text <- supplementary_statistics$question_text[1]
-  strongest_centroids <- supplementary_centroids %>%
-    dplyr::filter(
-      variable == strongest_supplementary,
-      respondent_n >= 5
-    )
-
-  supplementary_centroid_graph <- nmds_graph +
-    ggplot2::geom_point(
-      data = strongest_centroids,
-      ggplot2::aes(x = NMDS1, y = NMDS2, size = respondent_n),
-      inherit.aes = FALSE, shape = 21, fill = "#f7f7f7",
-      color = "#252525", stroke = 1
-    ) +
-    ggrepel::geom_text_repel(
-      data = strongest_centroids,
-      ggplot2::aes(x = NMDS1, y = NMDS2, label = category),
-      inherit.aes = FALSE, size = 3.5, seed = analysis_seed,
-      max.overlaps = Inf
-    ) +
-    ggplot2::guides(color = "none") +
-    ggplot2::labs(
-      subtitle = paste0(
-        "Centroids for ", strongest_supplementary_text,
-        "; categories with at least five respondents"
-      ),
-      size = "Respondents"
-    )
-
-  ggplot2::ggsave(
-    file.path(graph_path, "ordination_nmds-supplementary-centroids.png"),
-    supplementary_centroid_graph, height = 8, width = 10, units = "in"
-  )
-}
-
 grDevices::png(
-  file.path(graph_path, "ordination_nmds-shepard.png"),
+  ordination_plot_path("nmds-shepard"),
   width = 1800, height = 1600, res = 220
 )
-vegan::stressplot(nmds_fit, main = "NMDS Shepard plot")
+vegan::stressplot(
+  nmds_fit,
+  main = paste("NMDS Shepard plot", analysis_scenario, sep = "\n")
+)
 grDevices::dev.off()
 
 message(
   "Ordination workflow complete in ", ifelse(real_data, "REAL", "FAKE"),
-  " mode. Included ", sum(included_respondent), " of ", nrow(survey_v01),
+  " mode (", analysis_scenario, "). Excluded ", excluded_opposed_n,
+  " opposed respondents; included ", sum(included_respondent), " of ",
+  nrow(survey_v01),
   " respondents; selected exploratory PAM k = ", selected_profile_k, "."
 )
 
