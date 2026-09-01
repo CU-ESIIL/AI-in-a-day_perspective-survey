@@ -27,6 +27,10 @@ svy_v01 <- read.csv(file.path("data", "01_tidied-responses.csv")) %>%
 # Check structure
 dplyr::glimpse(svy_v01)
 
+# Remove no desired
+svy_v02 <- svy_v01 %>% 
+  dplyr::filter(!is.na(Training_Desired))
+
 # Read in survey question lookup table too
 lkup <- read.csv(file.path("data", "01_question-lookup-table.csv"))
 # dplyr::glimpse(lkup)
@@ -42,8 +46,22 @@ attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
   "Indifferent" = "#adb5bd",
   "Other" = "#343a40")
 
+# Process data
+attitude_df <- prep_select_one(df = svy_v02, q = "Gen_Attitude", grp = "Career_Stage") %>% 
+  dplyr::mutate(Gen_Attitude = factor(x = as.character(Gen_Attitude), levels = c(
+    "Very enthusiastic", "Enthusiastic", "A mix of caution and enthusiasm", "Cautious",
+    "Opposed to GenAI", "Indifferent", "Other")))
+
+# Check structure
+dplyr::glimpse(attitude_df)
+
 # Process data & graph
-graph_select_one(df = svy_v01, q = "Gen_Attitude", grp = "Career_Stage") +
+ggplot(attitude_df, aes(x = 'x', y = percent, fill = Gen_Attitude, color = 'y')) +
+# aes(x = as.character(q), y = percent, fill = .data[[q]], 
+#     color = "x")) +
+  ggplot2::geom_bar(stat = "identity") +
+  ggplot2::scale_color_manual(values = "#000") +
+  ggplot2::guides(color = "none") +
   facet_grid(. ~ Career_Stage) +
   scale_fill_manual(values = attitude_cols) +
   labs(x = "", y = "Percent Responses (%)",
@@ -69,7 +87,7 @@ ggsave(file.path("graphs", "lyon_ai-attitude_by-career.png"),
 freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000")
 
 # Process data & graph
-graph_select_one(df = svy_v01, q = "AIUse_Freq", grp = "Career_Stage") +
+graph_select_one(df = svy_v02, q = "AIUse_Freq", grp = "Career_Stage") +
   facet_grid(. ~ Career_Stage) +
   scale_fill_manual(values = freq_cols) +
   labs(x = "", y = "Percent Responses (%)",
@@ -95,7 +113,7 @@ ggsave(file.path("graphs", "lyon_freq-ai_by-career.png"),
 freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000", "I do not use data science in my research/role" = "#ff0000")
 
 # Process data & graph
-graph_select_one(df = svy_v01, q = "DS_Freq", grp = "Career_Stage") +
+graph_select_one(df = svy_v02, q = "DS_Freq", grp = "Career_Stage") +
   facet_grid(. ~ Career_Stage) +
   scale_fill_manual(values = freq_cols) +
   labs(x = "", y = "Percent Responses (%)",
