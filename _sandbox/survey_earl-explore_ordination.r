@@ -65,6 +65,9 @@
 #' and privacy procedure are established. `GenAI_Resources`, which is present in
 #' the fixture, is included as an exact-response nominal category; this preserves
 #' the column without claiming to have semantically coded its contents.
+#' A real-data file may omit `ResponseId` for de-identification. In that case the
+#' workflow creates a sequential in-memory `analysis_row_id` before filtering;
+#' it identifies rows only within that run and is not written to disk.
 #'
 #' @section Configuration:
 #' Configuration uses environment variables so the script remains unchanged
@@ -259,9 +262,10 @@ if (!analysis_scope %in% valid_analysis_scopes) {
     paste(valid_analysis_scopes, collapse = ", ")
   )
 }
+
 # Input paths may be overridden without editing this script.
 default_data_path <- if (real_data) {
-  file.path("data", "01_tidied-responses.csv")
+  file.path("data", "01_tidied-responses_no-free-text.csv")
 } else {
   file.path("data", "broken-row-survey-data.csv")
 }
@@ -729,6 +733,12 @@ survey_v01 <- read.csv(
     .fns = ~ dplyr::na_if(trimws(.), "")
   ))
 
+# Preserve a stable row reference when a de-identified real file omits its
+# respondent identifier. This key has no meaning outside the current input file.
+if (real_data && !"ResponseId" %in% names(survey_v01)) {
+  survey_v01$analysis_row_id <- seq_len(nrow(survey_v01))
+}
+
 required_questions <- c(
   active_ordinal_questions,
   paste0(active_ordinal_questions, "__value"),
@@ -773,7 +783,13 @@ if (!real_data && analysis_scope == "all-substantive") {
   }
 }
 
-respondent_id_question <- if (real_data) "ResponseId" else "fake_row"
+respondent_id_question <- if (real_data && "ResponseId" %in% names(survey_v01)) {
+  "ResponseId"
+} else if (real_data) {
+  "analysis_row_id"
+} else {
+  "fake_row"
+}
 if (!respondent_id_question %in% names(survey_v01)) {
   stop("Expected respondent identifier '", respondent_id_question, "' is absent")
 }
