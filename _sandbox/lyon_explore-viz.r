@@ -132,6 +132,48 @@ ggsave(file.path("graphs", "lyon_freq-ds_by-career.png"),
   height = 9, width = 15, units = "in")  
 
 ## -------------------------------------------- ##
+# AI Use Freq * Career Stage ----
+## -------------------------------------------- ##
+  
+# Do general prep for this question
+svy_prep <- svy_v01 %>% 
+  dplyr::filter(!Gen_Attitude %in% c("Indifferent", "Other"))
+
+# Identify focal question
+focal_q <- "TechSkill_Interest"
+
+# Loop across desired grouping variables
+for(focal_grp in c("Career_Stage", "Gen_Attitude")){
+  # focal_grp <- "Career_Stage"
+
+  # Prepare data
+  ready_df <- prep_select_all(df = svy_v01, q = focal_q, grp = focal_grp) %>% 
+    dplyr::mutate(value_wrap = stringr::str_wrap(string = value, width = 40),
+      .after = value) %>% 
+    dplyr::arrange(dplyr::desc(percent))
+
+  # Check structure
+  # dplyr::glimpse(ready_df)
+
+  # Make a graph
+  ggplot(ready_df[1:5, ], aes(x = percent, y = value_wrap, fill = value, color = 'x')) +
+  geom_bar(stat = "identity") +
+  scale_color_manual(values = "#000") +
+  guides(color = "none") +
+  labs(x = "Percent Responses (%)", y = "",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == focal_q], 
+      width = 60)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(legend.position = "none",
+    legend.title = element_blank(), 
+    strip.text = element_text(size = 16),
+    axis.title.y = element_blank())
+
+
+}
+
+
+## -------------------------------------------- ##
 # Career * Attitude Double Facet Graphs ----
 ## -------------------------------------------- ##
 
