@@ -4,13 +4,14 @@
 #' 
 #' @param df (data.frame) Table of survey data containing the response of interest
 #' @param q (character) Name of column (in `df`) containing question data of interest
+#' @param grp (character) Name of columns in `df`, by which to group the `q` values before calculating percent responses
 #' 
 #' importFrom magrittr %>%
 #' 
-graph_select_all <- function(df = NULL, q = NULL){
+graph_select_all <- function(df = NULL, q = NULL, grp = NULL){
 
   # Prepare the data
-  ready_df <- prep_select_all(df = df, q = q)
+  ready_df <- prep_select_all(df = df, q = q, grp = grp)
 
   # Create a graph
   simp_graph <- ggplot2::ggplot(data = ready_df, 
