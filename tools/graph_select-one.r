@@ -4,6 +4,7 @@
 #' 
 #' @param df (data.frame) Table of survey data containing the response of interest
 #' @param q (character) Name of column (in `df`) containing question data of interest
+#' @param grp (character) Name of columns in `df`, by which to group the `q` values before calculating percent responses
 #' 
 #' importFrom magrittr %>%
 #' 
