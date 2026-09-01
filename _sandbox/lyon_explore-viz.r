@@ -131,4 +131,81 @@ graph_select_one(df = svy_v01, q = "DS_Freq", grp = "Career_Stage") +
 ggsave(file.path("graphs", "lyon_freq-ds_by-career.png"),
   height = 9, width = 15, units = "in")  
 
+## -------------------------------------------- ##
+# Career * Attitude Double Facet Graphs ----
+## -------------------------------------------- ##
+
+# Loop across key questions
+for(focal_q in c("Task_interest", "TechSkill_Interest", "AIUse_reasons")){
+  # focal_q <- "Task_interest"
+
+  # Progress message
+  message("Checking out ", focal_q, " question")
+
+  # Prepare the data for that question
+  ready_df <- prep_select_all(df = svy_v01, q = focal_q, 
+    grp = c("Career_Stage", "Gen_Attitude")) %>% 
+    dplyr::mutate(
+      Career = dplyr::case_when(
+        Career_Stage == "Preparation Stage (Currently pursuing a graduate degree)" ~ "A: (Prep)",
+        Career_Stage == "Early Career Stage (1–9 years of experience post-degree)" ~ "B: 1-9 Years",
+        Career_Stage == "Mid-Career Stage (10–25 years of experience)" ~ "C: 10-25 years",
+        Career_Stage == "Mature Career Stage (26+ years of experience)" ~ "D: 26+ Years"), 
+      Att = dplyr::case_when(
+        Gen_Attitude == "Very enthusiastic" ~ "A: Love",
+        Gen_Attitude == "Enthusiastic" ~ "B: Like",
+        Gen_Attitude == "A mix of caution and enthusiasm" ~ "C: Mixed",
+        Gen_Attitude == "Cautious" ~ "D: Cautious",
+        Gen_Attitude == "Opposed to GenAI" ~ "E: Opposed",
+        TRUE ~ Gen_Attitude),
+      Career_Att = paste0(Career, "__", Att),
+      .after = Gen_Attitude) %>% 
+    dplyr::filter(!Gen_Attitude %in% c("Indifferent", "Other")) %>% 
+    dplyr::mutate(value_wrap = stringr::str_wrap(string = value, width = 40),
+      .after = value)
+
+  # Check structure
+  # dplyr::glimpse(ready_df)
+
+  # Loop across group combos
+  for(focal_grp in sort(unique(ready_df$Career_Att))){
+    # focal_grp <- "B: 1-9 Years__C: Mixed"
+
+    # Progress message
+    message("Making graph for '", focal_grp, "'")
+
+    # Subset data
+    ready_sub <- ready_df %>% 
+      dplyr::filter(Career_Att == focal_grp) %>% 
+      dplyr::arrange(dplyr::desc(percent))
+
+    # Graph it
+    ggplot(ready_sub[1:5, ], aes(x = percent, y = value_wrap, fill = value, color = 'x')) +
+      geom_bar(stat = "identity") +
+      facet_grid(Career_Att ~ .) +
+      scale_color_manual(values = "#000") +
+      guides(color = "none") +
+      labs(x = "Percent Responses (%)", y = "",
+        title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == focal_q], 
+          width = 60)) +
+      supportR::theme_lyon(title_size = 20, text_size = 16) +
+      theme(legend.position = "none",
+        legend.title = element_blank(), 
+        strip.text = element_text(size = 16),
+        axis.title.y = element_blank())
+
+    # Export locally
+    ggsave(file.path("graphs", paste0("lyon_career-attitude-double-facet_", 
+      tolower(focal_q), "_", tolower(focal_grp), ".png")),
+      height = 8, width = 10, units = "in")  
+    
+  }
+}
+
+
+
+
+
+
+
 # End ----
