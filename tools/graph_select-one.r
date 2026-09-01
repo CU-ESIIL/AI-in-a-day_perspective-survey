@@ -7,10 +7,10 @@
 #' 
 #' importFrom magrittr %>%
 #' 
-graph_select_one <- function(df = NULL, q = NULL){
+graph_select_one <- function(df = NULL, q = NULL, grp = NULL){
 
   # Prepare the data
-  ready_df <- prep_select_one(df = df, q = q)
+  ready_df <- prep_select_one(df = df, q = q, grp = grp)
 
   # Create a graph
   simp_graph <- ggplot2::ggplot(data = ready_df, 

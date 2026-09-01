@@ -4,10 +4,11 @@
 #' 
 #' @param df (data.frame) Table of survey data containing the response of interest
 #' @param q (character) Name of column (in `df`) containing question data of interest
+#' @param grp (character) Name of columns in `df`, by which to group the `q` values before calculating percent responses
 #' 
 #' importFrom magrittr %>%
 #' 
-prep_select_one <- function(df = NULL, q = NULL){
+prep_select_one <- function(df = NULL, q = NULL, grp = NULL){
 
   # Error checks for 'df'
   if(is.null(df) || "data.frame" %in% class(df) != TRUE)
@@ -17,8 +18,21 @@ prep_select_one <- function(df = NULL, q = NULL){
   if(is.null(q) || length(q) != 1 || is.character(q) != TRUE || q %in% names(df) != TRUE)
     stop("'q' must match a single column name in 'df'")
   
+  # Error checks for 'grp'
+  if(is.null(grp) != TRUE){
+    if(is.character(grp) != TRUE || all(grp %in% names(df)) != TRUE)
+      stop("'All entries in 'grp' must be an exact match for columns in 'df'")
+  }
+  
   # Remove NAs in relevant question
   df_v02 <- df[!is.na(df[[q]]),]
+
+  # If desired, also remove NAs from grouping column(s)
+  if(is.null(grp) != TRUE){
+    for(g in seq_along(grp)){
+      df_v02 <- df_v02[!is.na(df_v02[[grp[g]]]),]
+    }
+  }
 
   # Identify value column name
   val_name <- paste0(q, "__value")
@@ -36,15 +50,34 @@ prep_select_one <- function(df = NULL, q = NULL){
     df_v04[[q]] <- factor(x = df_v04[[q]], levels = unique(df_v04[[q]]))
   }
 
-  # Count responses per category
-  df_v05 <- df_v04 %>% 
-    dplyr::group_by(dplyr::across(dplyr::all_of(q))) %>% 
+  # Assign correct grouping structure
+  if(is.null(grp) != TRUE){
+    df_v05 <- df_v04 %>% 
+      dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, q))))
+  } else {
+    df_v05 <- df_v04 %>% 
+      dplyr::group_by(dplyr::across(dplyr::all_of(q)))
+  }
+
+  # Count responses per question * group category
+  df_v06 <- df_v05 %>% 
     dplyr::summarize(response_count = dplyr::n(),
-      .groups = "drop") %>% 
+      .groups = "drop")
+  
+  # Re-group as/if needed
+  if(is.null(grp) != TRUE){
+    df_v07 <- df_v06 %>% 
+      dplyr::group_by(dplyr::across(dplyr::all_of(c(grp))))
+  } else {
+    df_v07 <- df_v06
+  }
+
+  df_v08 <- df_v07 %>% 
     dplyr::mutate(total_responses = sum(response_count, na.rm = TRUE),
-      percent = round((response_count / total_responses) * 100, digits = 1))
+      percent = round((response_count / total_responses) * 100, digits = 1)) %>% 
+    dplyr::ungroup()
 
   # Return it
-  return(df_v05) }
+  return(df_v08) }
 
 # End ----
