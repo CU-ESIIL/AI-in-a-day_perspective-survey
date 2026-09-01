@@ -47,7 +47,7 @@ attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
   "Other" = "#343a40")
 
 # Process data
-attitude_df <- prep_select_one(df = svy_v02, q = "Gen_Attitude", grp = "Career_Stage") %>% 
+attitude_df <- prep_select_one(df = svy_v01, q = "Gen_Attitude", grp = "Career_Stage") %>% 
   dplyr::mutate(Gen_Attitude = factor(x = as.character(Gen_Attitude), levels = c(
     "Very enthusiastic", "Enthusiastic", "A mix of caution and enthusiasm", "Cautious",
     "Opposed to GenAI", "Indifferent", "Other")))
@@ -87,7 +87,7 @@ ggsave(file.path("graphs", "lyon_ai-attitude_by-career.png"),
 freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000")
 
 # Process data & graph
-graph_select_one(df = svy_v02, q = "AIUse_Freq", grp = "Career_Stage") +
+graph_select_one(df = svy_v01, q = "AIUse_Freq", grp = "Career_Stage") +
   facet_grid(. ~ Career_Stage) +
   scale_fill_manual(values = freq_cols) +
   labs(x = "", y = "Percent Responses (%)",
@@ -113,7 +113,7 @@ ggsave(file.path("graphs", "lyon_freq-ai_by-career.png"),
 freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000", "I do not use data science in my research/role" = "#ff0000")
 
 # Process data & graph
-graph_select_one(df = svy_v02, q = "DS_Freq", grp = "Career_Stage") +
+graph_select_one(df = svy_v01, q = "DS_Freq", grp = "Career_Stage") +
   facet_grid(. ~ Career_Stage) +
   scale_fill_manual(values = freq_cols) +
   labs(x = "", y = "Percent Responses (%)",
