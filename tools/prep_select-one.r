@@ -33,10 +33,7 @@ prep_select_one <- function(df = NULL, q = NULL, grp = NULL){
       df_v02 <- df_v02[!is.na(df_v02[[grp[g]]]),]
     }
   }
-
-  # Identify value column name
-  val_name <- paste0(q, "__value")
-
+  
   # Handle response order
   if(paste0(q, "__value") %in% names(df)){
     df_v03 <- dplyr::arrange(.data = df_v02, dplyr::across(dplyr::starts_with(paste0(q, "__value"))))
@@ -49,6 +46,16 @@ prep_select_one <- function(df = NULL, q = NULL, grp = NULL){
     df_v04 <- df_v03
     df_v04[[q]] <- factor(x = df_v04[[q]], levels = unique(df_v04[[q]]))
   }
+
+  # Make grouping variables a factor (if any are provided)
+  if(is.null(grp) != TRUE){
+    for(k in seq_along(grp)){
+      df_v04 <- df_v04 %>% 
+        dplyr::arrange(dplyr::across(dplyr::starts_with(paste0(grp[g], "__value"))))
+      df_v04[[grp[g]]] <- factor(x = df_v04[[grp[g]]], levels = unique(df_v04[[grp[g]]]))
+    }
+  }
+
 
   # Assign correct grouping structure
   if(is.null(grp) != TRUE){

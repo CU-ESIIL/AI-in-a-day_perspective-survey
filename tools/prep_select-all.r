@@ -50,6 +50,15 @@ prep_select_all <- function(df = NULL, q = NULL, grp = NULL, summarize = TRUE){
     dplyr::mutate(question = gsub(",", ";", question)) %>% 
     dplyr::mutate(question = gsub("___", ", ", question))
 
+  # Make grouping variables a factor (if any are provided)
+  if(is.null(grp) != TRUE){
+    for(k in seq_along(grp)){
+      df_v04 <- df_v04 %>% 
+        dplyr::arrange(dplyr::across(dplyr::starts_with(paste0(grp[g], "__value"))))
+      df_v04[[grp[g]]] <- factor(x = df_v04[[grp[g]]], levels = unique(df_v04[[grp[g]]]))
+    }
+  }
+
   # Count number of boxes checked per question
   delim_ct <- stringr::str_count(string = df_v04$question, pattern = ";")
   max_delim <- max(delim_ct, na.rm = TRUE)
