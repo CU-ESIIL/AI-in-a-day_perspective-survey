@@ -32,7 +32,33 @@ lkup <- read.csv(file.path("data", "01_question-lookup-table.csv"))
 # dplyr::glimpse(lkup)
 
 ## -------------------------------------------- ##
-# TBD ----
+# AI Attittude * Career Stage ----
 ## -------------------------------------------- ##
+
+# Make custom color palette
+attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
+  "A mix of caution and enthusiasm" = "#ffbc42",
+  "Enthusiastic" = "#0496ff", "Very enthusiastic" = "#006ba6",
+  "Indifferent" = "#adb5bd",
+  "Other" = "#343a40")
+
+# Process data & graph
+graph_select_one(df = svy_v01, q = "Gen_Attitude", grp = "Career_Stage") +
+  facet_grid(. ~ Career_Stage) +
+  scale_fill_manual(values = attitude_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 50)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(legend.title = element_blank(),
+    legend.position = "bottom",
+    plot.title = element_text(size = 20),
+    strip.text = element_text(size = 13),
+    legend.text = element_text(size = 13),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "lyon_ai-attitude_by-career.png"),
+  height = 9, width = 15, units = "in")
 
 # End ----
