@@ -47,7 +47,7 @@ graph_select_one(df = svy_v01, q = "Gen_Attitude", grp = "Career_Stage") +
   facet_grid(. ~ Career_Stage) +
   scale_fill_manual(values = attitude_cols) +
   labs(x = "", y = "Percent Responses (%)",
-    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 50)) +
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 80)) +
   supportR::theme_lyon(title_size = 20, text_size = 16) +
   theme(legend.title = element_blank(),
     legend.position = "bottom",
@@ -60,5 +60,57 @@ graph_select_one(df = svy_v01, q = "Gen_Attitude", grp = "Career_Stage") +
 # Export locally
 ggsave(file.path("graphs", "lyon_ai-attitude_by-career.png"),
   height = 9, width = 15, units = "in")
+
+## -------------------------------------------- ##
+# AI Use Freq * Career Stage ----
+## -------------------------------------------- ##
+
+# Make color palette
+freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000")
+
+# Process data & graph
+graph_select_one(df = svy_v01, q = "AIUse_Freq", grp = "Career_Stage") +
+  facet_grid(. ~ Career_Stage) +
+  scale_fill_manual(values = freq_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "AIUse_Freq"], width = 80)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(legend.title = element_blank(),
+    legend.position = "bottom",
+    plot.title = element_text(size = 20),
+    strip.text = element_text(size = 13),
+    legend.text = element_text(size = 13),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "lyon_freq-ai_by-career.png"),
+  height = 9, width = 15, units = "in")
+
+## -------------------------------------------- ##
+# AI Use Freq * Career Stage ----
+## -------------------------------------------- ##
+
+# Make color palette
+freq_cols <- c("Daily" = "#e9ecef", "Weekly" = "#adb5bd", "Monthly" = "#6c757d", "Yearly" = "#343a40", "Never" = "#000", "I do not use data science in my research/role" = "#ff0000")
+
+# Process data & graph
+graph_select_one(df = svy_v01, q = "DS_Freq", grp = "Career_Stage") +
+  facet_grid(. ~ Career_Stage) +
+  scale_fill_manual(values = freq_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "DS_Freq"], width = 80)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(legend.title = element_blank(),
+    legend.position = "bottom",
+    plot.title = element_text(size = 20),
+    strip.text = element_text(size = 13),
+    legend.text = element_text(size = 13),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "lyon_freq-ds_by-career.png"),
+  height = 9, width = 15, units = "in")  
 
 # End ----
