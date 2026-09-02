@@ -184,6 +184,15 @@ for(focal_q in c("Task_interest", "TechSkill_Interest", "AIUse_reasons")){
     # Check structure
     # dplyr::glimpse(ready_df)
 
+    # Get a more plot-ready version
+    ready_sub <- ready_df %>% 
+      dplyr::group_by(value) %>% 
+      dplyr::mutate(perc_tot = sum(percent, na.rm = TRUE)) %>% 
+      dplyr::ungroup() %>% 
+      dplyr::arrange(perc_tot) %>% 
+      dplyr::mutate(value = factor(value, levels = unique(value)),
+        value_wrap = factor(value_wrap, levels = unique(value_wrap)))
+
     # Loop across that to get top 5 responses per group variable
     ready_list <- list()
     for(sub_grp in sort(unique(ready_df[[focal_grp]]))){
@@ -194,8 +203,8 @@ for(focal_q in c("Task_interest", "TechSkill_Interest", "AIUse_reasons")){
         dplyr::slice_head(n = 5)
     }
 
-    # Unlist
-    ready_sub <- purrr::list_rbind(x = ready_list) %>% 
+    # Unlist the top 5 stuff
+    ready_top <- purrr::list_rbind(x = ready_list) %>% 
       dplyr::group_by(value) %>% 
       dplyr::mutate(perc_tot = sum(percent, na.rm = TRUE)) %>% 
       dplyr::ungroup() %>% 
@@ -207,11 +216,19 @@ for(focal_q in c("Task_interest", "TechSkill_Interest", "AIUse_reasons")){
     if(focal_grp == "Gen_Attitude"){
       ready_sub$Gen_Attitude <- factor(ready_sub$Gen_Attitude, 
         levels = rev(c("Opposed to GenAI", "Cautious", 
-        "A mix of caution and enthusiasm", "Enthusiastic", "Very enthusiastic", 
-        "Indifferent", "Other"))) }
+          "A mix of caution and enthusiasm", "Enthusiastic", "Very enthusiastic", 
+          "Indifferent", "Other"))) 
+      ready_top$Gen_Attitude <- factor(ready_top$Gen_Attitude, 
+        levels = rev(c("Opposed to GenAI", "Cautious", 
+          "A mix of caution and enthusiasm", "Enthusiastic", "Very enthusiastic", 
+          "Indifferent", "Other"))) }
     if(focal_grp == "Career_Stage"){
-      ready_sub$Career_Stage <- factor(ready_sub$Career_Stage, levels = c("Prep (graduate student)", 
-      "Early (1-9 years post-degree)", "Mid-Career (10-25 years)", "Mature (26+ Years)")) }
+      ready_sub$Career_Stage <- factor(ready_sub$Career_Stage, 
+        levels = c("Prep (graduate student)", "Early (1-9 years post-degree)", 
+          "Mid-Career (10-25 years)", "Mature (26+ Years)")) 
+      ready_top$Career_Stage <- factor(ready_top$Career_Stage, 
+        levels = c("Prep (graduate student)", "Early (1-9 years post-degree)", 
+          "Mid-Career (10-25 years)", "Mature (26+ Years)"))  }
     
     # Make a graph
     ggplot(ready_sub, aes(x = percent, y = value_wrap, fill = .data[[focal_grp]], color = 'x')) +
@@ -229,10 +246,27 @@ for(focal_q in c("Task_interest", "TechSkill_Interest", "AIUse_reasons")){
 
     # Generate graph file name
     facet_name <- paste0("lyon_grouped-select-alls_", gsub("_", "-", tolower(focal_q)), "_", 
-      gsub("_", "-", tolower(focal_grp)), ".png")
+      gsub("_", "-", tolower(focal_grp)))
 
     # Export the graph!
-    ggsave(file.path("graphs", facet_name), height = 10, width = 12, units = "in")  
+    ggsave(file.path("graphs", paste0(facet_name, ".png")), height = 14, width = 12, units = "in") 
+    
+    # Make a 'top 5' version of that graph
+    ggplot(ready_top, aes(x = percent, y = value_wrap, fill = .data[[focal_grp]], color = 'x')) +
+      geom_bar(stat = "identity") +
+      scale_color_manual(values = "#000") +
+      scale_fill_manual(values = selectall_cols) +
+      guides(color = "none") +
+      labs(x = "Percent Responses (%)", y = "",
+        title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == focal_q], 
+          width = 80)) +
+      supportR::theme_lyon(title_size = 20, text_size = 16) +
+      theme(legend.title = element_blank(), 
+        legend.position = "bottom",
+        axis.title.y = element_blank())
+    
+    # And export it too
+    ggsave(file.path("graphs", paste0(facet_name, "_top-5.png")), height = 14, width = 12, units = "in") 
   }
 }
 
