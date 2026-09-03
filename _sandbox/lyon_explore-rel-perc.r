@@ -56,6 +56,9 @@ if(!is.logical(summarize)){
 # Remove NAs in relevant question
 df_v02 <- df[!is.na(df[[q]]),]
 
+# Check structure
+dplyr::glimpse(df_v02)
+
 # If desired, also remove NAs from grouping column(s)
 if(is.null(grp) != TRUE){
   for(g in seq_along(grp)){
@@ -67,12 +70,18 @@ if(is.null(grp) != TRUE){
 need_cols <- intersect(x = names(df_v02), y = c("ResponseId", q, grp))
 df_v03 <- dplyr::select(.data = df_v02, dplyr::all_of(need_cols))
 
+# Check structure
+dplyr::glimpse(df_v03)
+
 # Handle difference between commas in actual response text versus collapsing char
 df_v04 <- df_v03 %>% 
   dplyr::rename_with(.fn = ~ gsub(pattern = q, replacement = "question", x = .)) %>% 
   dplyr::mutate(question = gsub(", ", "___", question)) %>% 
   dplyr::mutate(question = gsub(",", ";", question)) %>% 
   dplyr::mutate(question = gsub("___", ", ", question))
+
+# Check structure
+dplyr::glimpse(df_v04)
 
 # Make grouping variables a factor (if any are provided)
 if(is.null(grp) != TRUE){
@@ -87,6 +96,9 @@ if(is.null(grp) != TRUE){
 delim_ct <- stringr::str_count(string = df_v04$question, pattern = ";")
 max_delim <- max(delim_ct, na.rm = TRUE)
 
+# Check structure
+dplyr::glimpse(df_v04)
+
 # Get one row per 'checked box' in original question
 df_v05 <- df_v04 %>% 
   tidyr::separate_wider_delim(cols = question, delim = ";",
@@ -95,28 +107,44 @@ df_v05 <- df_v04 %>%
   dplyr::select(-name) %>% 
   dplyr::filter(!is.na(value))
 
+# Check structure
+dplyr::glimpse(df_v05)
+
 # Do generally-needed tidying of those responses
 df_v06 <- df_v05 %>% 
   dplyr::mutate(value = gsub(pattern = "’", replacement = "'", x = value))
 
+# Check structure
+dplyr::glimpse(df_v06)
+
 # Count total respondents
 df_v07 <- dplyr::mutate(.data = df_v06, total_respondents = length(unique(ResponseId)))
+
+# Check structure
+dplyr::glimpse(df_v07)
 
 # Assign correct grouping structure
 if(is.null(grp) != TRUE){
   df_v08 <- df_v07 %>% 
-    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "value", "total_respondents"))))
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "total_respondents")))) %>% 
+    dplyr::mutate(grp_respondents = length(unique(ResponseId))) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "value", "total_respondents", "grp_respondents"))))
 } else {
   df_v08 <- df_v07 %>% 
     dplyr::group_by(value, total_respondents)
 }
+
+# Check structure
+dplyr::glimpse(df_v08)
 
 # Summarize response data
 if(summarize == TRUE){
   df_v09 <- df_v08 %>% 
     dplyr::summarize(unique_respondents = length(unique(ResponseId)),
       .groups = "drop") %>% 
-    dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1)) %>% 
+    dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
+      relative_percent = round((grp_respondents / total_respondents) * 100, digits = 1)) %>% 
     dplyr::arrange(dplyr::desc(percent))   
 } else { df_v09 <- dplyr::ungroup(df_v08) }
 
