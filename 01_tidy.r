@@ -245,11 +245,24 @@ svy_v08 <- svy_v07 %>%
 dplyr::glimpse(svy_v08)
 
 ## -------------------------------------------- ##
+# Generate Needed Categories ----
+## -------------------------------------------- ##
+
+# Identify synthetic categories / combined "bins" of categories
+svy_v09 <- svy_v08 %>% 
+  dplyr::mutate(AI_powerUser = ifelse(
+    Gen_Attitude == "Very enthusiastic" & AIUse_Freq == "Daily",
+      yes = TRUE, no = FALSE))
+
+# Check structure
+dplyr::glimpse(svy_v09)
+
+## -------------------------------------------- ##
 # Export Outputs ----
 ## -------------------------------------------- ##
 
 # Make a final data object
-svy_v99 <- svy_v08
+svy_v99 <- svy_v09
 
 # Check its structure
 dplyr::glimpse(svy_v99)
