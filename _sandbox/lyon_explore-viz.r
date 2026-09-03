@@ -156,7 +156,8 @@ svy_prep <- svy_v01 %>%
     Career_Stage == "Early Career Stage (1–9 years of experience post-degree)" ~ "Early (1-9 years post-degree)",
     Career_Stage == "Mid-Career Stage (10–25 years of experience)" ~ "Mid-Career (10-25 years)",
     Career_Stage == "Mature Career Stage (26+ years of experience)" ~ "Mature (26+ Years)")) %>% 
-  dplyr::filter(!Gen_Attitude %in% c("Indifferent", "Other"))
+  dplyr::filter(!Gen_Attitude %in% c("Indifferent", "Other")) %>% 
+  dplyr::filter(AI_powerUser != TRUE)
 
 # Check structure
 dplyr::glimpse(svy_prep)
@@ -169,7 +170,9 @@ for(focal_q in c("Task_interest", "TechSkill_Interest", "AIUse_reasons")){
   message("Checking out ", focal_q, " question")
 
   # Loop across desired grouping variables
-  for(focal_grp in c("Career_Stage", "Gen_Attitude")){
+  for(focal_grp in c("Gen_Attitude"
+    # "Career_Stage", 
+    )){
     # focal_grp <- "Career_Stage"
 
     # Progress message
