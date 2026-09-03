@@ -36,6 +36,48 @@ lkup <- read.csv(file.path("data", "01_question-lookup-table.csv"))
 # dplyr::glimpse(lkup)
 
 ## -------------------------------------------- ##
+# AI Attittude * Use Frequency ----
+## -------------------------------------------- ##
+
+# Make custom color palette
+attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
+  "A mix of caution and enthusiasm" = "#ffbc42",
+  "Enthusiastic" = "#0496ff", "Very enthusiastic" = "#006ba6",
+  "Indifferent" = "#adb5bd",
+  "Other" = "#343a40")
+
+# Process data
+tude.use_df <- svy_v01 %>% 
+  dplyr::filter(!Gen_Attitude %in% c("Indifferent", "Other")) %>% 
+  prep_select_one(df = , q = "Gen_Attitude", grp = "AIUse_Freq") %>% 
+    dplyr::mutate(Gen_Attitude = factor(x = as.character(Gen_Attitude), levels = c(
+      "Very enthusiastic", "Enthusiastic", "A mix of caution and enthusiasm", "Cautious",
+      "Opposed to GenAI", "Indifferent", "Other")))
+
+# Check structure
+dplyr::glimpse(tude.use_df)
+
+# Process data & graph
+ggplot(tude.use_df, aes(x = AIUse_Freq, y = percent, fill = Gen_Attitude, color = 'y')) +
+  ggplot2::geom_bar(stat = "identity") +
+  ggplot2::scale_color_manual(values = "#000") +
+  ggplot2::guides(color = "none") +
+  scale_fill_manual(values = attitude_cols) +
+  labs(x = "", y = "Percent Responses (%)",
+    title = stringr::str_wrap(string = lkup$question_text[lkup$name_in_data == "Gen_Attitude"], width = 80)) +
+  supportR::theme_lyon(title_size = 20, text_size = 16) +
+  theme(legend.title = element_blank(),
+    legend.position = "bottom",
+    plot.title = element_text(size = 20),
+    strip.text = element_text(size = 13),
+    legend.text = element_text(size = 13),
+    axis.title.x = element_blank())
+
+# Export locally
+ggsave(file.path("graphs", "lyon_ai-attitude_by-use.png"),
+  height = 9, width = 15, units = "in")
+
+## -------------------------------------------- ##
 # AI Attittude * Career Stage ----
 ## -------------------------------------------- ##
 
