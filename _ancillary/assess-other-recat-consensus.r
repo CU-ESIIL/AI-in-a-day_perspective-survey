@@ -51,7 +51,7 @@ for(focal_name in c("Emery", "Quarderer", "Lyon")){
   # Rename one column more simply
   single_v2 <- supportR::safe_rename(data = single_df, 
     bad_names = paste0("Suggested_Recategorization_", focal_name),
-    good_names = paste0(focal_name, "_recat"))
+    good_names = focal_name)
   
   # Check structure
   # dplyr::glimpse(single_v2)
@@ -81,21 +81,8 @@ dplyr::glimpse(align_v01)
 
 # Do some post-processing
 align_v02 <- align_v01 %>% 
-  dplyr::mutate(question_id = seq_along(ResponseId)) %>% 
-  tidyr::pivot_longer(cols = dplyr::ends_with("recat")) %>% 
-  dplyr::group_by(dplyr::across(dplyr::all_of(setdiff(x = names(.),
-    y = c("value"))))) %>% 
-  dplyr::mutate(agreement_ct = dplyr::n()) %>% 
-  dplyr::group_by(dplyr::across(dplyr::all_of(setdiff(x = names(.),
-    y = c("agreement_ct"))))) %>% 
-  dplyr::summarize(consensus = max(agreement_ct, na.rm = TRUE),
-    .groups = "drop") %>% 
-  tidyr::pivot_wider(names_from = name, values_from = value) %>% 
-  dplyr::relocate(dplyr::starts_with("Notes_"),
-    .after = dplyr::everything()) %>% 
-  dplyr::arrange(Question_Code, Free_Text, dplyr::desc(consensus)) %>% 
-  dplyr::mutate(confirmed_recat = ifelse(consensus == 3,
-    yes = Emery_recat, no = NA))
+  dplyr::mutate(consensus = sum(c(Emery == Quarderer, 
+    Quarderer == Lyon, Emery == Lyon), na.rm = TRUE))
 
 # Check structure
 dplyr::glimpse(align_v02)
