@@ -5,10 +5,11 @@
 #' @param df (data.frame) Table of survey data containing the response of interest
 #' @param q (character) Name of column (in `df`) containing question data of interest
 #' @param grp (character) Name of columns in `df`, by which to group the `q` values before calculating percent responses
+#' @param summarize (logical) Whether to summarize data or just extract this question (and grouping variables if `grp` is specified). Defaults to `TRUE`
 #' 
 #' importFrom magrittr %>%
 #' 
-prep_select_one <- function(df = NULL, q = NULL, grp = NULL){
+prep_select_one <- function(df = NULL, q = NULL, grp = NULL, summarize = TRUE){
 
   # Error checks for 'df'
   if(is.null(df) || "data.frame" %in% class(df) != TRUE)
@@ -23,6 +24,11 @@ prep_select_one <- function(df = NULL, q = NULL, grp = NULL){
     if(is.character(grp) != TRUE || all(grp %in% names(df)) != TRUE)
       stop("'All entries in 'grp' must be an exact match for columns in 'df'")
   }
+
+  # Error checks for 'summarize'
+  if(!is.logical(summarize)){
+    warning("'summarize' must be a logical. Coercing to TRUE")
+    summarize <- TRUE }
   
   # Remove NAs in relevant question
   df_v02 <- df[!is.na(df[[q]]),]
@@ -74,14 +80,18 @@ prep_select_one <- function(df = NULL, q = NULL, grp = NULL){
   }
 
   # Summarize response data
-  df_v08 <- df_v07 %>% 
-    dplyr::group_by(dplyr::across(dplyr::all_of(
-      c(grp, q, "total_respondents", "grp_respondents")))) %>% 
-    dplyr::summarize(unique_respondents = length(unique(ResponseId)),
-      .groups = "drop") %>% 
-    dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
-      relative_percent = round((unique_respondents / grp_respondents) * 100, digits = 1)) %>% 
-    dplyr::arrange(dplyr::desc(percent))
+  if(summarize == TRUE){
+    df_v08 <- df_v07 %>% 
+      dplyr::group_by(dplyr::across(dplyr::all_of(
+        c(grp, q, "total_respondents", "grp_respondents")))) %>% 
+      dplyr::summarize(unique_respondents = length(unique(ResponseId)),
+        .groups = "drop") %>% 
+      dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
+        relative_percent = round((unique_respondents / grp_respondents) * 100, digits = 1)) %>% 
+      dplyr::arrange(dplyr::desc(percent))
+    } else {
+      df_v08 <- dplyr::ungroup(df_v07)
+    }
   
   # Return it
   return(df_v08) }
