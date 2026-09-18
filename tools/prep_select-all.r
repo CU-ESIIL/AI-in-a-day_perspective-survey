@@ -74,7 +74,8 @@ prep_select_all <- function(df = NULL, q = NULL, grp = NULL, summarize = TRUE){
 
   # Do generally-needed tidying of those responses
   df_v06 <- df_v05 %>% 
-    dplyr::mutate(value = gsub(pattern = "’", replacement = "'", x = value))
+    ## Replace non-ASCII characters
+    dplyr::mutate(value = gsub(pattern = "\u2019", replacement = "'", x = value))
   
   # Count total respondents
   df_v07 <- dplyr::mutate(.data = df_v06, total_respondents = length(unique(ResponseId)))
@@ -82,19 +83,23 @@ prep_select_all <- function(df = NULL, q = NULL, grp = NULL, summarize = TRUE){
   # Assign correct grouping structure
   if(is.null(grp) != TRUE){
     df_v08 <- df_v07 %>% 
-      dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "value", "total_respondents"))))
+      dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "total_respondents")))) %>% 
+      dplyr::mutate(grp_respondents = length(unique(ResponseId))) %>% 
+      dplyr::ungroup()
   } else {
-    df_v08 <- df_v07 %>% 
-      dplyr::group_by(value, total_respondents)
+    df_v08 <- dplyr::mutate(df_v07, grp_respondents = total_respondents)
   }
 
   # Summarize response data
   if(summarize == TRUE){
     df_v09 <- df_v08 %>% 
+      dplyr::group_by(dplyr::across(dplyr::all_of(
+        c(grp, "value", "total_respondents", "grp_respondents")))) %>% 
       dplyr::summarize(unique_respondents = length(unique(ResponseId)),
         .groups = "drop") %>% 
-      dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1)) %>% 
-      dplyr::arrange(dplyr::desc(percent))   
+      dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
+        relative_percent = round((unique_respondents / grp_respondents) * 100, digits = 1)) %>% 
+      dplyr::arrange(dplyr::desc(percent))
   } else { df_v09 <- dplyr::ungroup(df_v08) }
   
   # Return it
