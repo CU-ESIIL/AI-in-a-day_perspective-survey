@@ -53,7 +53,7 @@ graph_select_one(df = svy_v01, q = "AIUse_Freq") +
     axis.title.x = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_ai-frequency.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_ai-frequency.png"),
   height = 7, width = 7, units = "in")
 
 ## -------------------------------------------- ##
@@ -77,7 +77,7 @@ svy_v01 %>%
       axis.title.x = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_ds-frequency.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_ds-frequency.png"),
   height = 7, width = 7, units = "in")
 
 ## -------------------------------------------- ##
@@ -120,7 +120,7 @@ ggplot(data = ai_reason_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_ai-reasons.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_ai-reasons.png"),
   height = 25, width = 20, units = "in")
   
 # Make a 'top X' graph
@@ -147,7 +147,7 @@ ggplot(data = ai_reason_top, aes(x = percent, y = value,
     legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_ai-reasons-top.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_ai-reasons-top.png"),
   height = 15, width = 20, units = "in")
  
 # Tidy environment
@@ -182,7 +182,7 @@ ggplot(data = task_df, aes(x = percent, y = value,
     legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_task-interest.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_task-interest.png"),
   height = 22, width = 20, units = "in")
   
 # Make a 'top X' graph
@@ -208,7 +208,7 @@ ggplot(data = task_top, aes(x = percent, y = value,
     legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_task-interest-top.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_task-interest-top.png"),
   height = 15, width = 20, units = "in")
   
 # Tidy environment
@@ -243,7 +243,7 @@ ggplot(data = skill_df, aes(x = percent, y = value,
     legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_tech-skill-interest.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_tech-skill-interest.png"),
   height = 20, width = 20, units = "in")
 
 # Make a 'top X' graph
@@ -269,7 +269,7 @@ ggplot(data = skill_top, aes(x = percent, y = value,
     legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_tech-skill-interest-top.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_tech-skill-interest-top.png"),
   height = 15, width = 20, units = "in")
   
 # Tidy environment
@@ -317,7 +317,7 @@ ggplot(data = trainrec_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_training-received.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_training-received.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -353,7 +353,7 @@ ggplot(data = traindes_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_training-desired.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_training-desired.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -383,7 +383,7 @@ graph_select_one(df = svy_v01, q = "Gen_Attitude") +
     axis.title.x = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_general-attitude.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_general-attitude.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -418,7 +418,7 @@ ggplot(data = prom_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_opportunities.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_opportunities.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -453,7 +453,7 @@ ggplot(data = chal_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_challenges.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_challenges.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -493,7 +493,7 @@ svy_v01 %>%
       axis.title.x = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_perspective_policies.png"),
+ggsave(file.path("graphs", "single-qs", "02_perspective_policies.png"),
   height = 7, width = 9, units = "in")
 
 # Tidy environment
@@ -532,7 +532,7 @@ svy_v01 %>%
       axis.title.x = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_job_career-stage.png"),
+ggsave(file.path("graphs", "single-qs", "02_job_career-stage.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -567,7 +567,7 @@ ggplot(data = role_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_job_professional-role.png"),
+ggsave(file.path("graphs", "single-qs", "02_job_professional-role.png"),
   height = 15, width = 15, units = "in")
   
 # Tidy environment
@@ -599,7 +599,7 @@ graph_select_one(df = svy_v01, q = "Work_Sector") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_job_work-sector.png"),
+ggsave(file.path("graphs", "single-qs", "02_job_work-sector.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -633,7 +633,7 @@ svy_v01 %>%
       legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_job_formal-education.png"),
+ggsave(file.path("graphs", "single-qs", "02_job_formal-education.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -670,7 +670,7 @@ graph_select_one(df = svy_v01, q = "Field") +
     axis.title.x = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_job_field.png"),
+ggsave(file.path("graphs", "single-qs", "02_job_field.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -702,7 +702,7 @@ graph_select_one(df = svy_v01, q = "Gender") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_gender.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_gender.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -733,7 +733,7 @@ graph_select_one(df = svy_v01, q = "LGBTQIA") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_lgbtqia.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_lgbtqia.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -768,7 +768,7 @@ ggplot(data = race_df, aes(x = percent, y = value,
       legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_race-ethnicity_v1.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_race-ethnicity_v1.png"),
   height = 15, width = 15, units = "in")
 
 # Parse the data differently to create a (slightly) different graph
@@ -801,7 +801,7 @@ supportR::theme_lyon(title_size = 20, text_size = 16) +
     legend.position = "none")
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_race-ethnicity_v2.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_race-ethnicity_v2.png"),
   height = 15, width = 15, units = "in")
 
 # Tidy environment
@@ -831,7 +831,7 @@ graph_select_one(df = svy_v01, q = "Neurodiverse") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_neurodiverse.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_neurodiverse.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -868,7 +868,7 @@ svy_v01 %>%
       legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_caregiver.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_caregiver.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
@@ -897,7 +897,7 @@ graph_select_one(df = svy_v01, q = "FirstGen") +
     legend.title = element_blank())
 
 # Export locally
-ggsave(file.path("graphs", "02_demographics_first-gen.png"),
+ggsave(file.path("graphs", "single-qs", "02_demographics_first-gen.png"),
   height = 7, width = 7, units = "in")
 
 # Tidy environment
