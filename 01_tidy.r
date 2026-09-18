@@ -124,14 +124,14 @@ dplyr::glimpse(svy_v02)
 ## -------------------------------------------- ##
 
 # Identify best guess of country based on lat/long
-world_map <- ne_countries(scale = "medium", returnclass = "sf")
-svy_spatial <- st_as_sf(svy_v02,
+world_map <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+svy_spatial <- sf::st_as_sf(svy_v02,
   coords = c("LocationLongitude", "LocationLatitude"),
   crs = 4326, remove = FALSE)
 
 # Add it to the data
 svy_v03 <- sf::st_join(svy_spatial, world_map %>% dplyr::select(name),
-  join = st_intersects) %>%
+    join = st_intersects) %>%
   sf::st_drop_geometry(-geometry) %>%
   dplyr::rename(Country = name)
 
@@ -176,7 +176,8 @@ dplyr::glimpse(svy_v05)
 # Some free text answers basically fit a category option, fix those here
 svy_v06 <- svy_v05
 
-
+# This is described more fully in the following issue:
+## https://github.com/CU-ESIIL/AI-in-a-day_perspective-survey/issues/5
 
 # Check structure
 dplyr::glimpse(svy_v06)
@@ -215,7 +216,12 @@ svy_v07 <- svy_v06 %>%
       stringr::str_detect(., "Environmental Markets Lab") ~ gsub("Environmental Markets Lab", "[research lab]", x = .),
       stringr::str_detect(., "AI-related recommendations for administration, considerations for faculty, our values statement, some results of a faculty survey we conducted last year, and a bibliography of helpful sources about AI.") ~ gsub("AI-related recommendations for administration, considerations for faculty, our values statement, some results of a faculty survey we conducted last year, and a bibliography of helpful sources about AI.", "[quote]", x = .),
       # stringr::str_detect(., "") ~ gsub("", "[]", x = .),
-      TRUE ~ .)))
+      TRUE ~ .))) %>% 
+  # Remove any non-ASCII characters
+  dplyr::mutate(dplyr::across(.cols = dplyr::all_of(free_cols),
+    .fns = ~ suppressWarnings(supportR::replace_non_ascii(x = ., include_letters = TRUE))))
+## Suppressing warnings because of bug in `replace_non_ascii` flagging `NA` with a warning
+## Lyon is author and will fix
 
 # Check structure
 dplyr::glimpse(svy_v07)
@@ -250,9 +256,12 @@ dplyr::glimpse(svy_v08)
 
 # Identify synthetic categories / combined "bins" of categories
 svy_v09 <- svy_v08 %>% 
-  dplyr::mutate(AI_powerUser = ifelse(
-    Gen_Attitude == "Very enthusiastic" & AIUse_Freq == "Daily",
-      yes = TRUE, no = FALSE))
+  dplyr::mutate(
+    AI_powerUser = ifelse(Gen_Attitude == "Very enthusiastic" & AIUse_Freq == "Daily",
+      yes = TRUE, no = FALSE),
+    AIUse_FreqBins = ifelse(AIUse_Freq %in% c("Daily", "Weekly"),
+      yes = "High GenAI Use", no = "Low GenAI Use")
+    )
 
 # Check structure
 dplyr::glimpse(svy_v09)
