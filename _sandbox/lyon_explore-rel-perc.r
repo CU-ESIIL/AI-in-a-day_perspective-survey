@@ -48,11 +48,6 @@ if(is.null(grp) != TRUE){
     stop("'All entries in 'grp' must be an exact match for columns in 'df'")
 }
 
-# Error checks for 'summarize'
-if(!is.logical(summarize)){
-  warning("'summarize' must be a logical. Coercing to TRUE")
-  summarize <- TRUE }
-  
 # Remove NAs in relevant question
 df_v02 <- df[!is.na(df[[q]]),]
 
@@ -73,90 +68,71 @@ df_v03 <- dplyr::select(.data = df_v02, dplyr::all_of(need_cols))
 # Check structure
 dplyr::glimpse(df_v03)
 
-# Handle difference between commas in actual response text versus collapsing char
-df_v04 <- df_v03 %>% 
-  dplyr::rename_with(.fn = ~ gsub(pattern = q, replacement = "question", x = .)) %>% 
-  dplyr::mutate(question = gsub(", ", "___", question)) %>% 
-  dplyr::mutate(question = gsub(",", ";", question)) %>% 
-  dplyr::mutate(question = gsub("___", ", ", question))
+# Handle response order
+if(paste0(q, "__value") %in% names(df)){
+  df_v04 <- dplyr::arrange(.data = df_v03, dplyr::across(dplyr::starts_with(paste0(q, "__value"))))
+} else { df_v04 <- dplyr::arrange(.data = df_v03, dplyr::across(dplyr::starts_with(q))) }
 
 # Check structure
 dplyr::glimpse(df_v04)
 
-# Make grouping variables a factor (if any are provided)
-if(is.null(grp) != TRUE){
-  for(k in seq_along(grp)){
-    df_v04 <- df_v04 %>% 
-      dplyr::arrange(dplyr::across(dplyr::starts_with(paste0(grp[g], "__value"))))
-    df_v04[[grp[g]]] <- factor(x = df_v04[[grp[g]]], levels = unique(df_v04[[grp[g]]]))
-  }
+# Make response into a factor
+if(is.factor(df[[q]])){
+  df_v05 <- df_v04
+} else {
+  df_v05 <- df_v04
+  df_v05[[q]] <- factor(x = df_v05[[q]], levels = unique(df_v05[[q]]))
 }
-
-# Count number of boxes checked per question
-delim_ct <- stringr::str_count(string = df_v04$question, pattern = ";")
-max_delim <- max(delim_ct, na.rm = TRUE)
-
-# Check structure
-dplyr::glimpse(df_v04)
-
-# Get one row per 'checked box' in original question
-df_v05 <- df_v04 %>% 
-  tidyr::separate_wider_delim(cols = question, delim = ";",
-    names = c(paste0("box", 1:(max_delim + 1))), too_few = "align_start") %>% 
-  tidyr::pivot_longer(cols = dplyr::starts_with("box")) %>% 
-  dplyr::select(-name) %>% 
-  dplyr::filter(!is.na(value))
 
 # Check structure
 dplyr::glimpse(df_v05)
 
-# Do generally-needed tidying of those responses
-df_v06 <- df_v05 %>% 
-  ## Replace non-ASCII characters
-  dplyr::mutate(value = gsub(pattern = "\u2019", replacement = "'", x = value))
+# Make grouping variables a factor (if any are provided)
+if(is.null(grp) != TRUE){
+  for(k in seq_along(grp)){
+    df_v05 <- df_v05 %>% 
+      dplyr::arrange(dplyr::across(dplyr::starts_with(paste0(grp[g], "__value"))))
+    df_v05[[grp[g]]] <- factor(x = df_v05[[grp[g]]], levels = unique(df_v05[[grp[g]]]))
+  }
+}
+
+# Check structure
+dplyr::glimpse(df_v05)
+
+# Count total respondents
+df_v06 <- dplyr::mutate(.data = df_v05, total_respondents = length(unique(ResponseId)))
 
 # Check structure
 dplyr::glimpse(df_v06)
 
-# Count total respondents
-df_v07 <- dplyr::mutate(.data = df_v06, total_respondents = length(unique(ResponseId)))
+# Assign correct grouping structure
+if(is.null(grp) != TRUE){
+  df_v07 <- df_v06 %>% 
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "total_respondents")))) %>% 
+    dplyr::mutate(grp_respondents = length(unique(ResponseId))) %>% 
+    dplyr::ungroup()
+} else {
+  df_v07 <- dplyr::mutate(df_v06, grp_respondents = total_respondents)
+}
 
 # Check structure
 dplyr::glimpse(df_v07)
 
-# Assign correct grouping structure
-if(is.null(grp) != TRUE){
-  df_v08 <- df_v07 %>% 
-    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "total_respondents")))) %>% 
-    dplyr::mutate(grp_respondents = length(unique(ResponseId))) %>% 
-    dplyr::ungroup()
-    
-} else {
-  df_v08 <- df_v07 %>% 
-    dplyr::mutate(grp_respondents = total_respondents)
-}
+# Summarize response data
+df_v08 <- df_v07 %>% 
+  dplyr::group_by(dplyr::across(dplyr::all_of(
+    c(grp, q, "total_respondents", "grp_respondents")))) %>% 
+  dplyr::summarize(unique_respondents = length(unique(ResponseId)),
+    .groups = "drop") %>% 
+  dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
+    relative_percent = round((unique_respondents / grp_respondents) * 100, digits = 1)) %>% 
+  dplyr::arrange(dplyr::desc(percent))
 
 # Check structure
 dplyr::glimpse(df_v08)
 
-# Summarize response data
-if(summarize == TRUE){
-  df_v09 <- df_v08 %>% 
-    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "value", "total_respondents", "grp_respondents")))) %>% 
-    dplyr::summarize(unique_respondents = length(unique(ResponseId)),
-      .groups = "drop") %>% 
-    dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
-      relative_percent = round((unique_respondents / grp_respondents) * 100, digits = 1)) %>% 
-    dplyr::arrange(dplyr::desc(percent))   
-} else { df_v09 <- dplyr::ungroup(df_v08) }
-
-# Check structure
-dplyr::glimpse(df_v09)
-
-
 # Do some axis wrapping
-df_v10 <- df_v09 %>% 
-  mutate(value = stringr::str_wrap(value, 40))
+df_v09 <- df_v08
 
 # Make custom color palette
 attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
@@ -166,8 +142,8 @@ attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
   "Other" = "#343a40")
 
 # Exploratory graph
-rel_plot <- ggplot(df_v10, aes(x = relative_percent, y = Gen_Attitude, 
-    fill = value, color = "x")) +
+rel_plot <- ggplot(df_v09, aes(x = relative_percent, y = Gen_Attitude, 
+    fill = AIUse_Freq, color = "x")) +
   ggplot2::geom_bar(stat = "identity") +
   labs(title = "RELATIVE") +
   # scale_fill_manual(values = attitude_cols) +
@@ -175,7 +151,7 @@ rel_plot <- ggplot(df_v10, aes(x = relative_percent, y = Gen_Attitude,
   ggplot2::guides(color = "none")
 
 # And (for comparison) non-relative exploratory graph
-abs_plot <- ggplot(df_v10, aes(x = percent, y = value, 
+abs_plot <- ggplot(df_v09, aes(x = percent, y = AIUse_Freq, 
     fill = Gen_Attitude, color = "x")) +
   ggplot2::geom_bar(stat = "identity") +
   labs(title = "ABSOLUTE") +
