@@ -32,7 +32,7 @@ dplyr::glimpse(svy_v01)
 ## -------------------------------------------- ##
 
 # Define key vars
-df <- svy_v01; q <- "AIUse_reasons"; grp <- "Gen_Attitude"; summarize = TRUE
+df <- svy_v01; q <- "AIUse_Freq"; grp <- "Gen_Attitude"; summarize = TRUE
 
 # Error checks for 'df'
 if(is.null(df) || "data.frame" %in% class(df) != TRUE)
@@ -112,7 +112,8 @@ dplyr::glimpse(df_v05)
 
 # Do generally-needed tidying of those responses
 df_v06 <- df_v05 %>% 
-  dplyr::mutate(value = gsub(pattern = "’", replacement = "'", x = value))
+  ## Replace non-ASCII characters
+  dplyr::mutate(value = gsub(pattern = "\u2019", replacement = "'", x = value))
 
 # Check structure
 dplyr::glimpse(df_v06)
@@ -128,11 +129,11 @@ if(is.null(grp) != TRUE){
   df_v08 <- df_v07 %>% 
     dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "total_respondents")))) %>% 
     dplyr::mutate(grp_respondents = length(unique(ResponseId))) %>% 
-    dplyr::ungroup() %>% 
-    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "value", "total_respondents", "grp_respondents"))))
+    dplyr::ungroup()
+    
 } else {
   df_v08 <- df_v07 %>% 
-    dplyr::group_by(value, total_respondents)
+    dplyr::mutate(grp_respondents = total_respondents)
 }
 
 # Check structure
@@ -141,15 +142,50 @@ dplyr::glimpse(df_v08)
 # Summarize response data
 if(summarize == TRUE){
   df_v09 <- df_v08 %>% 
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(grp, "value", "total_respondents", "grp_respondents")))) %>% 
     dplyr::summarize(unique_respondents = length(unique(ResponseId)),
       .groups = "drop") %>% 
     dplyr::mutate(percent = round((unique_respondents / total_respondents) * 100, digits = 1),
-      relative_percent = round((grp_respondents / total_respondents) * 100, digits = 1)) %>% 
+      relative_percent = round((unique_respondents / grp_respondents) * 100, digits = 1)) %>% 
     dplyr::arrange(dplyr::desc(percent))   
 } else { df_v09 <- dplyr::ungroup(df_v08) }
 
 # Check structure
 dplyr::glimpse(df_v09)
+
+
+# Do some axis wrapping
+df_v10 <- df_v09 %>% 
+  mutate(value = stringr::str_wrap(value, 40))
+
+# Make custom color palette
+attitude_cols <- c("Opposed to GenAI" = "#8f2d56", "Cautious" = "#d81159",
+  "A mix of caution and enthusiasm" = "#ffbc42",
+  "Enthusiastic" = "#0496ff", "Very enthusiastic" = "#006ba6",
+  "Indifferent" = "#adb5bd",
+  "Other" = "#343a40")
+
+# Exploratory graph
+rel_plot <- ggplot(df_v10, aes(x = relative_percent, y = Gen_Attitude, 
+    fill = value, color = "x")) +
+  ggplot2::geom_bar(stat = "identity") +
+  labs(title = "RELATIVE") +
+  # scale_fill_manual(values = attitude_cols) +
+  ggplot2::scale_color_manual(values = "#000") +
+  ggplot2::guides(color = "none")
+
+# And (for comparison) non-relative exploratory graph
+abs_plot <- ggplot(df_v10, aes(x = percent, y = value, 
+    fill = Gen_Attitude, color = "x")) +
+  ggplot2::geom_bar(stat = "identity") +
+  labs(title = "ABSOLUTE") +
+  scale_fill_manual(values = attitude_cols) +
+  ggplot2::scale_color_manual(values = "#000") +
+  ggplot2::guides(color = "none")
+
+# Export both locally
+ggsave(rel_plot, filename = file.path("graphs", "lyon_relative-percent-test.png"), width = 10, height = 8, units = "in")
+ggsave(abs_plot, filename = file.path("graphs", "lyon_absolute-percent-test.png"), width = 10, height = 8, units = "in")
 
 # End ----
 
