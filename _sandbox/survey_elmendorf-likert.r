@@ -1,8 +1,10 @@
 # -------------------------------------------------
-# survey_elmendorf_likert.R
+# survey_elmendorf_survey_stats.R
 # -------------------------------------------------
 # Experimenting with fitting bayesian models
-# with both x and y as likert
+# with both x and y as likert for the first 4 questions,
+# continuing down the list with ordinal package for simple ordinal models
+# as appropriate to the question
 # -------------------------------------------------
 
 # -------------------------------------------------
@@ -39,7 +41,9 @@ librarian::shelf(
   brms,
   marginaleffects,
   emmeans,
-  tidybayes
+  tidybayes,
+  loo,
+  ordinal
 )
 
 
@@ -51,11 +55,70 @@ purrr::walk(
   source
 )
 
-# define useful helper functions for visualizing bayesian posteriors
-# on priors as sanity check that the prior is not driving the 
-# distribution for any critical params
 
-# viz posterior on prior
+# -------------------------------------------------
+# Choose dataset  and read it with the required logic
+# -------------------------------------------------
+data_path <- file.path("data", "01_tidied-responses.csv")
+
+# Read CSV, convert empty strings to NA, and add a RespondentId column.
+svy_v01 <- read.csv(data_path, stringsAsFactors = FALSE) %>%
+  dplyr::mutate(
+    dplyr::across(.cols = dplyr::everything(), .fns = ~ ifelse(nchar(.) == 0, NA, .))
+  )
+
+# Use the same variable name as before for downstream code.
+survey_raw <- svy_v01
+
+# Define where graphs will be saved based on the data toggle.
+graph_path <- "graphs"
+
+# -------------------------------------------------
+# Clean column names & basic preparation
+# -------------------------------------------------
+survey <- survey_raw %>%
+  clean_names()   # snake_case, removes spaces, etc.
+
+
+# ------------------------------------------------------------------
+# Re‑level the categorical AI attitude column to reflect the ordered
+#    Likert scale defined by `gen_attitude_value` (the cleaned column name).
+# ------------------------------------------------------------------
+# Re‑level the categorical AI attitude column based on its numeric counterpart.
+# We first create an ordered vector of unique attitude labels sorted by the
+# associated numeric value, then use that vector as the factor levels.
+# Create a vector of unique attitude labels sorted by their numeric value.
+# We filter out missing or empty strings and then use `unique()` after sorting to
+# ensure that duplicate label entries (which can arise from repeated text in the
+# raw data) do not cause factor level duplication errors.
+# Re‑level ordered factors in a single step using the numeric ordering columns
+survey <- survey %>%
+  dplyr::mutate(
+    gen_attitude = factor(.data[["gen_attitude"]],
+                          levels = unique(.data[["gen_attitude"]][order(.data[["gen_attitude_value"]])]),
+                          ordered = TRUE),
+    ds_freq = factor(.data[["ds_freq"]],
+                     levels = unique(.data[["ds_freq"]][order(.data[["ds_freq_value"]])]),
+                     ordered = TRUE),
+    ai_use_freq = factor(.data[["ai_use_freq"]],
+                     levels = unique(.data[["ai_use_freq"]][order(.data[["ai_use_freq_value"]])]),
+                     ordered = TRUE),
+    career_stage = factor(.data[["career_stage"]],
+                          levels = unique(.data[["career_stage"]][order(.data[["career_stage_value"]])]),
+                          ordered = TRUE),
+    policies = factor(.data[["policies"]],
+                      levels = unique(.data[["policies"]][order(.data[["policies_value"]])]),
+                      ordered = TRUE)                                        
+  )
+# Ensure ordinal columns are numeric (they should already be, but be safe).
+survey <- survey %>%
+  dplyr::mutate(across(ends_with("_value"), as.numeric))
+
+# -------------------------------------------------
+# fit_likert_pair(): ordinal model workflow for a
+# Likert predictor (x) and Likert outcome (y)
+# -------------------------------------------------
+
 prior_post_draws <- function(fit_post, fit_prior,
                              pattern = "^(b_|bsp_|simo_)") {
   post_vars  <- grep(pattern, variables(fit_post),  value = TRUE)
@@ -105,341 +168,341 @@ plot_prior_post <- function(d, ncol = 3, trim = c(.005, .995)) {
 # pp <- prior_post_draws(fit_mono, fit_prior_mono)
 # plot_prior_post(pp)
 
-# -------------------------------------------------
-# Choose dataset (de‑identified vs full) and read it with the required logic
-# -------------------------------------------------
-real_data <- TRUE   # FALSE → use de‑identified `broken-row‑survey‑data.csv`
-data_path <- if (real_data) {
-  file.path("data", "01_tidied-responses.csv")
-} else {
-  file.path("data", "broken-row-survey-data.csv")
-}
+fit_likert_pair <- function(data, x, y,
+                            b_sd_fac    = 1,
+                            disc_sd     = 0.25,
+                            run_ls      = TRUE,
+                            adapt_delta = 0.99,
+                            cores = 4, seed = 1,
+                            cache_dir   = NULL,
+                            file_prefix = NULL,
+                            overwrite   = FALSE,
+                            quiet = FALSE) {
+  
+  stopifnot(is.character(x), is.character(y), length(x) == 1, length(y) == 1)
+  if (!all(c(x, y) %in% names(data)))
+    stop("Columns not found in data: ",
+         paste(setdiff(c(x, y), names(data)), collapse = ", "))
 
-# Read CSV, convert empty strings to NA, and add a RespondentId column.
-svy_v01 <- read.csv(data_path, stringsAsFactors = FALSE) %>%
-  dplyr::mutate(
-    dplyr::across(.cols = dplyr::everything(), .fns = ~ ifelse(nchar(.) == 0, NA, .))
+  # ---- data prep -------------------------------------------------------
+  dat <- data[!is.na(data[[x]]) & !is.na(data[[y]]), , drop = FALSE]
+
+  # mo() needs an ordered factor or integer; cumulative() needs ordered y
+  if (!is.ordered(dat[[x]])) {
+    warning(x, " is not an ordered factor; coercing with its current level order.")
+    dat[[x]] <- factor(dat[[x]], ordered = TRUE)
+  }
+  if (!is.ordered(dat[[y]])) {
+    warning(y, " is not an ordered factor; coercing with its current level order.")
+    dat[[y]] <- factor(dat[[y]], ordered = TRUE)
+  }
+
+  # drop levels left empty by upstream filtering — otherwise brms estimates
+  # thresholds for categories nobody chose
+  dat <- droplevels(dat)
+
+  K_x <- nlevels(dat[[x]]); K_y <- nlevels(dat[[y]])
+  if (K_x < 3) stop(x, " has fewer than 3 levels after filtering; mo() needs >= 3.")
+  if (K_y < 3) stop(y, " has fewer than 3 levels after filtering.")
+
+  # unordered copy of x for the dummy-coded model (see notes)
+  dat_fac <- dat
+  dat_fac[[x]] <- factor(as.character(dat[[x]]),
+                         levels = levels(dat[[x]]), ordered = FALSE)
+
+  # ---- names built from the variables ----------------------------------
+  simo_coef <- paste0("mo", x, "1")
+  b_sd_mono <- b_sd_fac / (K_x - 1)     # b is the per-step effect
+
+  f_mono <- brms::bf(stats::as.formula(sprintf("%s ~ mo(%s)", y, x)))
+  f_fac  <- brms::bf(stats::as.formula(sprintf("%s ~ %s",     y, x)))
+  f_ls   <- brms::bf(stats::as.formula(sprintf("%s ~ mo(%s)", y, x)),
+                     stats::as.formula(sprintf("disc ~ 0 + mo(%s)", x)))
+
+  # ---- priors ----------------------------------------------------------
+  th_prior <- brms::set_prior("student_t(3, 0, 2.5)", class = "Intercept")
+
+  priors_mono <- c(
+    brms::set_prior(sprintf("normal(0, %g)", b_sd_mono), class = "b"),
+    th_prior,
+    brms::set_prior("dirichlet(1)", class = "simo", coef = simo_coef)
   )
 
-if(!real_data){
-  svy_v01$ResponseId <- c(1:nrow(svy_v01))
+  priors_fac <- c(
+    brms::set_prior(sprintf("normal(0, %g)", b_sd_fac), class = "b"),
+    th_prior
+  )
+
+  priors_ls <- c(
+    priors_mono,
+    brms::set_prior(sprintf("normal(0, %g)", disc_sd / (K_x - 1)),
+                    class = "b", dpar = "disc"),
+    brms::set_prior("dirichlet(1)", class = "simo",
+                    coef = simo_coef, dpar = "disc")
+  )
+
+  # ---- resolve the cache path -------------------------------------------
+  if (is.null(file_prefix) && !is.null(cache_dir)) {
+    dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
+    file_prefix <- file.path(cache_dir, make.names(paste0(y, "__by__", x)))
+  }
+
+  tags <- c("mono", "fac", if (run_ls) "ls")
+  tags <- c(tags, paste0(tags, "_prior"))
+
+  if (!is.null(file_prefix)) {
+    paths    <- paste0(file_prefix, "_", tags, ".rds")
+    existing <- paths[file.exists(paths)]
+
+    if (length(existing) && !overwrite) {
+      stop("Fit files already exist:\n  ",
+           paste(existing, collapse = "\n  "),
+           "\n\nPass overwrite = TRUE to refit and replace them, ",
+           "or choose a different file_prefix / cache_dir.",
+           call. = FALSE)
+    }
+
+    if (length(existing) && overwrite) {
+      if (!quiet) message("Removing ", length(existing), " existing fit file(s).")
+      file.remove(existing)
+    }
+  }
+
+    # ---- fitting ---------------------------------------------------------
+  fp <- function(tag) if (is.null(file_prefix)) NULL else paste0(file_prefix, "_", tag)
+  ctrl <- list(adapt_delta = adapt_delta)
+
+  run <- function(formula, d, prior, tag) {
+    if (!quiet) message("Fitting ", tag, " ...")
+    brms::brm(formula, data = d, family = brms::cumulative("probit"),
+              prior = prior, cores = cores, seed = seed,
+              control = ctrl, file = fp(tag))
+  }
+
+  fit_mono <- run(f_mono, dat,     priors_mono, "mono")
+  fit_fac  <- run(f_fac,  dat_fac, priors_fac,  "fac")
+  fit_ls   <- if (run_ls) run(f_ls, dat, priors_ls, "ls") else NULL
+
+  prior_only <- function(fit, tag) {
+    if (is.null(fit)) return(NULL)
+    if (!quiet) message("Fitting ", tag, " (prior only) ...")
+    stats::update(fit, sample_prior = "only", seed = seed,
+                  cores = cores, file = fp(paste0(tag, "_prior")))
+  }
+
+  prior_mono <- prior_only(fit_mono, "mono")
+  prior_fac  <- prior_only(fit_fac,  "fac")
+  prior_ls   <- prior_only(fit_ls,   "ls")
+
+  # ---- checks, comparison, BF -----------------------------------------
+  fits       <- purrr::compact(list(mono = fit_mono, fac = fit_fac, ls = fit_ls))
+  fits_prior <- purrr::compact(list(mono = prior_mono, fac = prior_fac, ls = prior_ls))
+
+  prior_post <- purrr::map2(fits, fits_prior, prior_post_draws)
+  prior_pc   <- purrr::imap(fits_prior, \(f, nm)
+    brms::pp_check(f, type = "bars", ndraws = 200) +
+      ggplot2::ggtitle(paste0("Prior predictive: ", nm)))
+  post_pc    <- purrr::imap(fits, \(f, nm)
+    brms::pp_check(f, type = "bars", ndraws = 200) +
+      ggplot2::ggtitle(paste0("Posterior predictive: ", nm)))
+
+  fits_loo <- purrr::map(fits, brms::add_criterion, "loo")
+  loo_tab  <- loo::loo_compare(purrr::map(fits_loo, \(f) f$criteria$loo))
+
+  # BF for the monotonic slope only; thresholds/simplex have no meaningful null
+  slope_row <- grep("^mo", rownames(brms::fixef(fit_mono)), value = TRUE)
+  if (length(slope_row) != 1)
+    stop("Expected exactly one monotonic term, found: ",
+         paste(slope_row, collapse = ", "))
+  slope_draw <- paste0("bsp_", slope_row)
+
+  bf_slope <- bayestestR::bayesfactor_parameters(
+    fit_mono, prior = prior_mono,
+    parameters = paste0("^", gsub("([\\W])", "\\\\\\1", slope_draw, perl = TRUE), "$")
+  )
+
+  ce <- brms::conditional_effects(fit_mono, categorical = TRUE)
+  ce_plot <- plot(ce, plot = FALSE)[[1]] +
+    ggplot2::theme_bw() +
+    ggplot2::labs(x = x, y = paste0("P(", y, " = k)")) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+  structure(list(
+    x = x, y = y, n = nrow(dat), K_x = K_x, K_y = K_y,
+    data = dat,
+    priors = list(mono = priors_mono, fac = priors_fac, ls = priors_ls),
+    fits = fits_loo, fits_prior = fits_prior,
+    prior_post = prior_post, prior_pc = prior_pc, post_pc = post_pc,
+    loo = loo_tab,
+    bf_slope = bf_slope,
+    slope_summary = brms::fixef(fit_mono)[slope_row, , drop = FALSE],
+    ce = ce, ce_plot = ce_plot
+  ), class = "likert_pair")
+}
+
+# define function to load so you don't have to rerun everything
+load_likert_pair <- function(x, y,
+                             cache_dir   = NULL,
+                             file_prefix = NULL,
+                             data = NULL) {
+
+  if (is.null(file_prefix) && !is.null(cache_dir))
+    file_prefix <- file.path(cache_dir, make.names(paste0(y, "__by__", x)))
+  if (is.null(file_prefix)) stop("Give cache_dir or file_prefix.")
+
+  rd <- function(tag) {
+    p <- paste0(file_prefix, "_", tag, ".rds")
+    if (file.exists(p)) readRDS(p) else NULL
+  }
+
+  fits       <- purrr::compact(list(mono = rd("mono"), fac = rd("fac"), ls = rd("ls")))
+  fits_prior <- purrr::compact(list(mono = rd("mono_prior"),
+                                    fac  = rd("fac_prior"),
+                                    ls   = rd("ls_prior")))
+
+  if (is.null(fits$mono)) stop("No monotonic fit found at ", file_prefix, "_mono.rds")
+
+  fit_mono   <- fits$mono
+  prior_mono <- fits_prior$mono
+  dat        <- if (is.null(data)) fit_mono$data else data
+
+  # ---- recompute the cheap parts -----------------------------------------
+  slope_row <- grep("^mo", rownames(brms::fixef(fit_mono)), value = TRUE)
+  if (length(slope_row) != 1)
+    stop("Expected one monotonic term, found: ", paste(slope_row, collapse = ", "))
+
+  bf_slope <- if (!is.null(prior_mono))
+    bayestestR::bayesfactor_parameters(fit_mono, prior = prior_mono,
+                                       parameters = paste0("bsp_", slope_row))
+  else NULL
+
+  fits_loo <- purrr::map(fits, brms::add_criterion, "loo")
+  loo_tab  <- if (length(fits_loo) > 1)
+    loo::loo_compare(purrr::map(fits_loo, \(f) f$criteria$loo)) else NULL
+
+  prior_post <- if (length(fits_prior))
+    purrr::map2(fits[names(fits_prior)], fits_prior, prior_post_draws) else NULL
+
+  ce      <- brms::conditional_effects(fit_mono, categorical = TRUE)
+  ce_plot <- plot(ce, plot = FALSE)[[1]] +
+    ggplot2::theme_bw() +
+    ggplot2::labs(x = x, y = paste0("P(", y, " = k)")) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+  structure(list(
+    x = x, y = y, n = nrow(dat),
+    K_x = nlevels(dat[[x]]), K_y = nlevels(dat[[y]]),
+    data = dat,
+    fits = fits_loo, fits_prior = fits_prior,
+    prior_post = prior_post,
+    prior_pc = purrr::imap(fits_prior, \(f, nm)
+      brms::pp_check(f, type = "bars", ndraws = 200) +
+        ggplot2::ggtitle(paste0("Prior predictive: ", nm))),
+    post_pc = purrr::imap(fits, \(f, nm)
+      brms::pp_check(f, type = "bars", ndraws = 200) +
+        ggplot2::ggtitle(paste0("Posterior predictive: ", nm))),
+    loo = loo_tab,
+    bf_slope = bf_slope,
+    slope_summary = brms::fixef(fit_mono)[slope_row, , drop = FALSE],
+    ce = ce, ce_plot = ce_plot
+  ), class = "likert_pair")
 }
 
 
-# Use the same variable name as before for downstream code.
-survey_raw <- svy_v01
+print.likert_pair <- function(z, ...) {
+  cat(sprintf("\n%s ~ %s   (n = %d, K_x = %d, K_y = %d)\n",
+              z$y, z$x, z$n, z$K_x, z$K_y))
 
-# Define where graphs will be saved based on the data toggle.
-graph_path <- if (real_data) "graphs" else "graphs_fake"
+  # slope: one line
+  s <- z$slope_summary[1, ]
+  cat(sprintf("slope   b = %.2f [%.2f, %.2f]\n",
+              s[["Estimate"]], s[["Q2.5"]], s[["Q97.5"]]))
 
-# -------------------------------------------------
-# Clean column names & basic preparation
-# -------------------------------------------------
-survey <- survey_raw %>%
-  clean_names()   # snake_case, removes spaces, etc.
+  # Bayes factor: one line, no footnote
+  logbf <- as.data.frame(z$bf_slope)$log_BF[1]
+  cat(sprintf("BF10    %s\n",
+              if (logbf > log(100)) "> 100"
+              else if (logbf < log(1/100)) "< 0.01"
+              else sprintf("%.1f", exp(logbf))))
+
+  # LOO: just the ranking
+  l <- as.matrix(z$loo)[, c("elpd_diff", "se_diff"), drop = FALSE]
+  cat("\nmodel comparison (best first):\n")
+  print(round(l, 1))
+
+  cat("\n")
+  invisible(z)
+}
+
+dat_q1 <- survey %>%
+  filter(!gen_attitude %in% c("Other", "Indifferent"))
+
+res_1 <- fit_likert_pair(dat_q1, x = "career_stage", y = "gen_attitude",
+                       file_prefix = "fits/attitude_by_stage", overwrite = TRUE)
+
+# example can reload without fitting if you want to not rerun
+res_1  <-load_likert_pair(x = "career_stage", y = "gen_attitude", 
+file_prefix = "fits/attitude_by_stage")
+
+#examine output
+res_1$loo
+res_1$ce_plot
+summary (res_1$fits$mono)
+plot_prior_post(res_1$prior_post$mono)
+res_1$prior_pc$mono
 
 
-# ------------------------------------------------------------------
-# Re‑level the categorical AI attitude column to reflect the ordered
-#    Likert scale defined by `gen_attitude_value` (the cleaned column name).
-# ------------------------------------------------------------------
-# Re‑level the categorical AI attitude column based on its numeric counterpart.
-# We first create an ordered vector of unique attitude labels sorted by the
-# associated numeric value, then use that vector as the factor levels.
-# Create a vector of unique attitude labels sorted by their numeric value.
-# We filter out missing or empty strings and then use `unique()` after sorting to
-# ensure that duplicate label entries (which can arise from repeated text in the
-# raw data) do not cause factor level duplication errors.
-# Re‑level ordered factors in a single step using the numeric ordering columns
-survey <- survey %>%
-  dplyr::mutate(
-    gen_attitude = factor(.data[["gen_attitude"]],
-                          levels = unique(.data[["gen_attitude"]][order(.data[["gen_attitude_value"]])]),
-                          ordered = TRUE),
-    ds_freq = factor(.data[["ds_freq"]],
-                     levels = unique(.data[["ds_freq"]][order(.data[["ds_freq_value"]])]),
-                     ordered = TRUE),
-    career_stage = factor(.data[["career_stage"]],
-                          levels = unique(.data[["career_stage"]][order(.data[["career_stage_value"]])]),
-                          ordered = TRUE)                  
+dat_q2 <- survey %>%
+  filter(grepl("Early", career_stage) &
+    !is.na(ai_use_freq)&
+    !is.na(ds_freq)
   )
-# Ensure ordinal columns are numeric (they should already be, but be safe).
-survey <- survey %>%
-  dplyr::mutate(across(ends_with("_value"), as.numeric))
 
-# ------------------------------------------------------------------
-# Likert-vs-likert model, 
-# ------------------------------------------------------------------
+res_2 <- fit_likert_pair(dat_q2, x = "ds_freq", y = "ai_use_freq",
+                       file_prefix = "fits/early_career_dsfreq_by_ai_usefreq",
+                        overwrite = TRUE)
 
-## (1) PRIMARY MODEL: cumulative probit with a monotonic predictor -----------
-# Dirichlet prior on the simplex (spacing) parameter; weakly-informative
-# Normal(0,1) prior on the (probit-scale) monotonic coefficient b.
-# 
-# reference paper is here: Burkner and Charpentier 2020
-# https://doi.org/10.1111/bmsp.12195
-# SCE needs to triple check the priors but I think ok?
+res_2 <-load_likert_pair(x = "ds_freq", y = "ai_use_freq", 
+file_prefix = "fits/early_career_dsfreq_by_ai_usefreq")
+res_2$loo
+res_2$ce_plot
+summary (res_2$fits$mono)
 
-# https://paulbuerkner.com/brms/reference/set_prior.html
-#monotonic effects make use of a special parameter vector to estimate the
-#'normalized distances' between consecutive predictor categories. This is
-#'# realized in Stan using the simplex parameter type. This class is named
-#'# "simo" (short for simplex monotonic) in brms.
-#'
-
-# used default brms priors
-# but fliipped
-priors <- c(
-  # this would be the default
-  #prior(normal(0, 1),         class = "b"),
-  # matching scale somewhat to categorical below
-  # because b ends up being between lowest and highest cat
-  prior(normal(0, 0.33),         class = "b"),
-  prior(student_t(3, 0, 2.5), class = "Intercept"),
-  # recommended default prior on the simplex from the manuscript
-  # reasonably assume difference between all categories similar as a prior
-  prior(dirichlet(1),         class = "simo", coef = "mocareer_stage1")
+#n = 140
+dat_q3<- survey %>%
+  filter(grepl("Early", career_stage) &
+    !is.na(policies) &
+         !policies %in% c("Other", "There are not any policies or guidelines at my institution")&
+    !is.na(ai_use_freq)
 )
 
+res_3 <- fit_likert_pair(dat_q3, x = "policies", y = "ai_use_freq",
+                       file_prefix = "fits/early_career_policies_by_ai_usefreq",
+                        overwrite = TRUE)
 
-# fit monotonic
-fit_mono <- brm(
-  gen_attitude ~ mo(career_stage),
-  data = survey %>% filter(!is.na(gen_attitude)&
-                             !gen_attitude%in% c("Other","Indifferent")),
-  family = cumulative("probit"),
-  prior = priors, cores = 4, seed = 1,
-  control = list(adapt_delta = 0.95)
-)
-
-#note due to ordering you cannot just
-# sample prior = yes in the above to get the same answer
-fit_prior_mono <- update(fit_mono,
-                         sample_prior = 'only')
+res_3$loo
+res_3$ce_plot
+summary (res_3$fits$mono)
 
 
-# y well within yrep
-pp_check(fit_prior_mono, type = "bars", ndraws = 200) +
-  ggtitle("Prior predictive: implied response distribution")
+dat_q4 <- survey %>%
+  filter(grepl("Early", career_stage) &
+  !is.na(career_stage),
+         !gen_attitude %in% c("Other", "Indifferent"),
+        !is.na(gender) & gender != "Prefer not to answer") %>%
+  droplevels()
 
-pp <- prior_post_draws(fit_mono, fit_prior_mono)
-plot_prior_post(pp)
+# no effects of gender among early c
+res_4 <- ordinal::clm(gen_attitude ~ gender, data = dat_q4, link = "probit")
+# overall test of the predictor
+drop1(m, test = "Chisq")
 
-# Sce experimented with
-# Kurz advice on the cutpoints for the intercepts
-# https://solomonkurz.netlify.app/blog/2021-12-29-notes-on-the-bayesian-cumulative-probit/
-# but gave illogical priors outside of range of posterior so default
-# to burkner defaults
+# Assumption checks
+# chsq nonsig so keep the simpler test
+res_4_nom  <- ordinal::clm(gen_attitude ~ 1, nominal = ~ gender, data = dat_q4, link = "probit")
+anova(res_4, res_4_nom)   
 
-# cutpoints  <-tibble(rating = 1:5) %>%
-#   mutate(proportion = 1/5) %>% 
-#   mutate(cumulative_proportion = cumsum(proportion)) %>% 
-#   mutate(right_hand_threshold = qnorm(cumulative_proportion))
-# 
-# priors_kurz <- c(
-#   prior(normal(0, 1),class = "b"),
-#   prior = c(prior(normal(-0.8416212, 1), class = Intercept, coef = 1),
-#             prior(normal(-0.2533471, 1), class = Intercept, coef = 2),
-#             prior(normal(0.2533471, 1), class = Intercept, coef = 3),
-#             prior(normal(8416212, 1), class = Intercept, coef = 4)),
-#   # recommended default prior on the simplex from the manuscript
-#   # reasonably assume difference between all categories similar as a prior
-#   prior(dirichlet(1),class = "simo", coef = "mocareer_stage1")
-# )
-# 
-# 
-# fit_mono_kurz <- brm(
-#   gen_attitude ~ mo(career_stage),
-#   data = survey %>% filter(!is.na(gen_attitude)&
-#                              !gen_attitude%in% c("Other","Indifferent")),
-#   family = cumulative("probit"),
-#   prior = priors_kurz, cores = 4, seed = 1,
-#   control = list(adapt_delta = 0.95)
-# )
-# 
-# fit_prior_mono_kurz <- brm(
-#   gen_attitude ~ mo(career_stage),
-#   data = survey %>% filter(!is.na(gen_attitude)&
-#                              !gen_attitude%in% c("Other","Indifferent")),
-#   family = cumulative("probit"),
-#   prior = priors_kurz, cores = 4, seed = 1,
-#   control = list(adapt_delta = 0.95),
-#   sample_prior = "only"       # ignores the likelihood entirely
-# )
-# 
-# pp_check(fit_prior_mono_kurz, type = "bars", ndraws = 200) +
-#   ggtitle("Prior predictive: implied response distribution")
-# 
+ordinal::scale_test(res_4)     # unequal variance: does the latent SD differ by stage?
 
-priors_fac <- c(
-  prior(normal(0, 1),         class = "b"),
-  prior(student_t(3, 0, 2.5), class = "Intercept")#,
-)
-
-fit_fac  <- brm(
-  gen_attitude ~ career_stage,
-  data = survey %>% filter(!is.na(gen_attitude)&
-                             !gen_attitude%in% c("Other","Indifferent")),
-  family = cumulative("probit"),
-  prior = priors_fac, cores = 4, seed = 1,
-  control = list(adapt_delta = 0.95) # career_stage unordered factor
-)
-
-fit_prior_fac <- update(fit_fac,
-                         sample_prior = 'only')
-
-
-pp_fac <- prior_post_draws(fit_fac, fit_prior_fac)
-plot_prior_post(pp_fac)
-
-pp_check(fit_prior_fac, type = "bars", ndraws = 200) +
-  ggtitle("Prior predictive: implied response distribution")
-
-
-# different variance model
-# get divergent transitions on this one wi 0.95, trying
-# with tighter adapt_delta
-fit_ls <- brm(
-  bf(gen_attitude ~ mo(career_stage), disc ~ mo(career_stage)),   
-  data = survey %>% filter(!is.na(gen_attitude)&
-                             !gen_attitude%in% c("Other","Indifferent")),
-  family = cumulative("probit"),
-  prior = priors, cores = 4, seed = 1,
-  control = list(adapt_delta = 0.99)
-)
-
-fit_prior_ls <- update(fit_ls,
-                        sample_prior = 'only')
-
-pp_ls <- prior_post_draws(fit_ls, fit_prior_ls)
-plot_prior_post(pp_ls)
-
-pp_check(fit_prior_ls, type = "bars", ndraws = 200) +
-  ggtitle("Prior predictive: implied response distribution")
-
-
-#best one is highest
-# ~2-4 differens is meaningful
-# Model bakeoff, suggests more or less the fit_mono is the one we want
-# ELPD differences + SE
-loo_compare(add_criterion(fit_mono, "loo"), add_criterion(fit_fac, "loo"),
-            add_criterion(fit_ls, "loo"))
-
-# can add some other bits on why this is a good model
-# but summary term is in the 
-summary (fit_mono)
-
-# interpret/viz
-# predicted P(Y=k | x)
-ps <-plot(conditional_effects(fit_mono, categorical = TRUE),
-          plot = FALSE)
-lapply(ps, \(p) p + theme_bw() +
-         theme(axis.text.x = element_text(angle = 45, hjust = 1)))
-
-#model checking
-# posteriors on priors
-
-# bayes factor
-bf <- bayestestR::bayesfactor_parameters(fit_mono)
-
-# still to do, rhats, etc
-
-
-
-
-
-########### want vs had
-# Prep both 'training received' and 'training desired' dataframes
-trainrec_df <- prep_select_all(df = survey %>%
-                                 rename(ResponseId = response_id),
-                               q = "training_received",
-                               summarize = FALSE) %>% 
-  dplyr::rename_with(.fn = ~ paste0("had_", .), .cols = -value) %>%
-  mutate(response = "Yes", type = 'had')%>%
-  rename(ResponseId = had_ResponseId)
-
-traindes_df <- prep_select_all(df = survey %>%
-                                 rename(ResponseId = response_id),
-                               q = "training_desired", summarize = FALSE) %>% 
-  dplyr::rename_with(.fn = ~ paste0("want_", .), .cols = -value)%>%
-  mutate(response = "Yes", type = 'want')%>%
-  rename(ResponseId = want_ResponseId)
-
-# fill out the NO's by difference
-train_binary <- bind_rows(trainrec_df, traindes_df)
-
-not_response = expand_grid(ResponseId = unique(train_binary$ResponseId),
-                           value  = unique(train_binary$value),
-                           type = unique(train_binary$type)) %>%
-  anti_join(., train_binary, by = c("ResponseId", "value", "type")) %>%
-  mutate(response = "No")
-
-# Join the selected and inferred not selected
-train_binary <- bind_rows(train_binary, not_response) %>%
-  rename(learning_mode = value) %>%
-  mutate(response_numeric = ifelse(response == "Yes", 1, 0)) %>%
-  mutate(learning_mode = factor(learning_mode))
-
-library (lme4)
-## Check structure
-dplyr::glimpse(train_binary)
-
-#relevel so the intercepts reflect what people WANT to learn
-train_binary$type <- relevel(factor(train_binary$type), ref = "want")
-
-# random intercepts as subjects not distinct
-m_no_int_want_ref_baseline <- glmer(
-  response_numeric ~ 0 + learning_mode + learning_mode:type + (1 | ResponseId),
-  family = binomial,
-  data = train_binary,
-  #may not need this funkiness if working with real data where the ranefs should be more estimable
-  control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
-)
-
-# this one is probably more correct if it's not singular;
-# would assume some people just overall WANT more training and/or HAD
-# more training, but not that the same people want/have more training
-m_no_int_want_ref_random <- glmer(
-  response_numeric ~ 0 + learning_mode + learning_mode:type + (1 + type | ResponseId),
-  family = binomial,
-  data = train_binary,
-  #may not need this funkiness if working with real data where the ranefs should be more estimable
-  control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
-)
-
-#AIC lower is better
-anova(m_no_int_want_ref_baseline, m_no_int_want_ref_random)
-
-pred <- ggeffects::predict_response(m_no_int_want_ref_random,
-                         terms = c("type", "learning_mode"),
-                         type = "fixed",
-                         bias_correction = TRUE)   # population-level, random effects at 0
-
-plot(pred) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-# because the ggeffects melts down on the no intercept model rerun
-# even though the params are less interpretable this way
-m_want_ref_random <- glmer(
-  response_numeric ~ learning_mode*type + (1 + type | ResponseId),
-  family = binomial,
-  data = train_binary,
-  #may not need this funkiness if working with real data where the ranefs should be more estimable
-  control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
-)
-
-pred <- ggeffects::predict_response(m_want_ref_random,
-                                    terms = c("type", "learning_mode"),
-                                    type = "fixed",
-                                    bias_correction = TRUE)   # population-level, random effects at 0
-#still broken I don't think ggeffects is working correctly on this
-plot(pred) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-# type effect within each mode — what the 0+ coding gave you directly
-emmeans(m_want_ref_random, ~ type | learning_mode) |> contrast("pairwise")
-
-# whether modes differ in their type effect — the interaction proper
-# this is less intepretable
-emmeans(m_want_ref_random, ~ type | learning_mode) |> contrast("pairwise") |>
-  contrast("pairwise", by = NULL)
+# stopped here 25 Sept 2026
 
