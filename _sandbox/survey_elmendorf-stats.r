@@ -444,6 +444,64 @@ res_1 <- fit_likert_pair(dat_q1, x = "career_stage", y = "gen_attitude",
 res_1  <-load_likert_pair(x = "career_stage", y = "gen_attitude", 
 file_prefix = "fits/attitude_by_stage")
 
+yvar <- all.vars(res_1$fits$mono$formula$formula)[1]
+xvar <- setdiff(names(res_1$data), yvar)  
+
+raw_1 <- res_1$data %>%
+  dplyr::count(.data[[xvar]], .data[[yvar]]) %>%
+  group_by(.data[[xvar]]) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>%
+  rename(effect1__ = !!xvar, effect2__ = !!yvar)
+
+# improved aesthetics rather than the default
+# effects plots
+ce <- as.data.frame(res_1$ce[[1]])
+
+pal <- scales::viridis_pal(option = "D", end = .9)(nlevels(raw_1$effect2__))
+names(pal) <- levels(raw_1$effect2__)
+
+tot_1 <- raw_1 %>%
+  group_by(effect1__) %>%
+  summarise(n = sum(n), top = max(prop), .groups = "drop")
+ggplot() +
+  geom_col(data = raw_1,
+           aes(effect1__, prop, fill = effect2__),
+           position = position_dodge(width = .8), width = .7,
+           alpha = .35, colour = NA) +
+  geom_text(data = tot_1,
+            aes(effect1__, top, label = paste0("n = ", n)),
+            vjust = -0.8, size = 3, colour = "grey30")+
+  geom_linerange(data = ce,
+                  aes(effect1__, estimate__, ymin = lower__, ymax = upper__,
+                      color = effect2__),
+                  position = position_dodge(width = .8), size = .3) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = pal) +
+  scale_colour_manual(values = pal) +
+  labs(x = res_1$x, y = paste0("P(", res_1$y, " = k)"),
+       fill = res_1$y, colour = res_1$y) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_x_discrete(labels = scales::label_wrap(20))
+
+
+
+
+res_1$ce_plot +
+  geom_col(data = raw_1, aes(x = effect1__, y = prop, fill = effect2__),
+           position = position_dodge(width = .8), width = .7,
+           alpha = .35)
+
+
+  geom_bar(data = raw_1,
+             aes(x = .data[[xvar]], y = prop, colour = .data[[yvar]]),
+             #shape = 4, size = 2.5, stroke = 1,
+             position = position_dodge(width = 0.4),
+             inherit.aes = FALSE) +
+  labs(caption = "crosses = observed proportions")
+
+
 #examine output
 res_1$loo
 res_1$ce_plot
