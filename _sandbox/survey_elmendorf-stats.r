@@ -14,7 +14,7 @@
 # deal with the inconsistencies in the re.formula implementation 
 # across brms vs emm in the predictions
 # https://github.com/easystats/modelbased/issues/579
-rm(list = ls())
+# rm(list = ls())
 source(file.path("-setup.r"))          # clears environment, creates folders
 gc()                  # start with a clean workspace
 
@@ -1272,9 +1272,9 @@ if (rerun_mods){
 res_challenges_attitude <- fit_select_all(challenges_long_attitude,
                                           x = "gen_attitude",
                                            verbose = TRUE)
-saveRDS(res_challenges_attitude, file.path('fits', 'res_challenges_attitude'))
+saveRDS(res_challenges_attitude, file.path('fits', 'res_challenges_attitude.rds'))
 } else {
-  res_challenges_attitude <-readRDS(file.path('fits', 'res_challenges_attitude'))
+  res_challenges_attitude <-readRDS(file.path('fits', 'res_challenges_attitude.rds'))
 }
 res_challenges_attitude$plot
 ggsave(plot = res_challenges_attitude$plot, filename =
@@ -1334,16 +1334,26 @@ confint(pairs(emmeans(res_4, ~ gender, mode = "linear.predictor")))
 
 
 # ---- model estimates ----------------------------------------------------
-emm <- as.data.frame(
-  emmeans(res_4, ~ ai_use_freq | gender, mode = "prob"))
+emm  <- as.data.frame(
+  marginaleffects::avg_predictions(
+    res_4,
+    by = "gender"
+  )
+)
+  
+  
+#   as.data.frame(
+#   emmeans(res_4, ~ ai_use_freq | gender, mode = "prob"))
+# names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
+
+# emm <- as.data.frame(
+#   marginaleffects::avg_predictions(res_4, ~ ai_use_freq | gender, mode = "prob"))
 names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
 
-emm <- as.data.frame(
-  marginaleffects::avg_predictions(res_4, ~ ai_use_freq | gender, mode = "prob"))
-names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
+#avg_predictions(res_4, by = "gender")
 
 emm <-emm %>%
-  mutate(ai_use_freq = factor(as.character(ai_use_freq),
+  mutate(ai_use_freq = factor(as.character(group),
  levels = levels(dat_q4$ai_use_freq),
   ordered = TRUE))
 
@@ -1360,9 +1370,11 @@ raw <- dat_q4 %>%
 tot <- raw %>% group_by(gender) %>% summarise(n = sum(n), .groups = "drop")
 
 # ---- plot ---------------------------------------------------------------
-gender_plot <- ggplot(emm, aes(gender, prob)) +
+# gender_plot <- ggplot(emm, aes(gender, prob)) +
+gender_plot <- ggplot(emm, aes(gender, estimate)) +
   geom_col(data = raw, aes(y = prop), fill = "grey85", width = .7) +
-  geom_pointrange(aes(ymin = asymp.LCL, ymax = asymp.UCL),
+  #geom_pointrange(aes(ymin = asymp.LCL, ymax = asymp.UCL),
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
                   colour = "firebrick", size = .3) +
   geom_text(data = tot, aes(y = Inf, label = paste0("n = ", n)),
             vjust = 1.4, size = 2.6, colour = "grey40") +
