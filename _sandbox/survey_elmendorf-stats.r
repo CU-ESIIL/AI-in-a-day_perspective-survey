@@ -839,9 +839,12 @@ fit_select_all <- function(data, x, id = "ResponseId",
     print(performance::icc(fit))
   }
   
-  # population-average predictions, comparable to the observed proportions.
-  # emmeans' default (random effects = 0) gives subject-specific estimates,
-  # which are shrunk toward 0.5 relative to the raw proportions.
+  # predictions, comparable to the observed proportions.
+  # re.form = NULL includes all ranefs; predictions conditional on the subjects included
+  # will match the actual proportions in the data
+  # but is not population estimates assuming random sampling. If we want that we need to use
+  # re.form = NA. This is a bit tricky to explain in the methods.
+  # emmeans' default (random effects = 0) estimates will be shrunk relative to the raw proportions
    emm <- as.data.frame(
       marginaleffects::avg_predictions(
         fit, by = c("question", x), re.form = NULL)) %>%
