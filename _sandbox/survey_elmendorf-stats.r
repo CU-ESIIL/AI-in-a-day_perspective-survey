@@ -1337,11 +1337,12 @@ confint(pairs(emmeans(res_4, ~ gender, mode = "linear.predictor")))
 emm  <- as.data.frame(
   marginaleffects::avg_predictions(
     res_4,
-    by = "gender"
+    by = "gender",
+    type = "prob"
   )
 )
   
-  
+# other option go via emmmeans, gives the same answer
 #   as.data.frame(
 #   emmeans(res_4, ~ ai_use_freq | gender, mode = "prob"))
 # names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
