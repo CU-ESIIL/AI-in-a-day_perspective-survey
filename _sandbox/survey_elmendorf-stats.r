@@ -55,7 +55,6 @@ purrr::walk(
   source
 )
 
-
 # -------------------------------------------------
 # Choose dataset  and read it with the required logic
 # -------------------------------------------------
@@ -115,8 +114,10 @@ survey <- survey %>%
   dplyr::mutate(across(ends_with("_value"), as.numeric))
 
 # -------------------------------------------------
-# fit_likert_pair(): ordinal model workflow for a
+# Define functions for models with
 # Likert predictor (x) and Likert outcome (y)
+# Baysian monotonic effects with ordinal outcomes
+# Similar to Rasch models
 # -------------------------------------------------
 
 prior_post_draws <- function(fit_post, fit_prior,
@@ -434,6 +435,54 @@ print.likert_pair <- function(z, ...) {
   invisible(z)
 }
 
+
+make.likert.plot <-function(fit){
+  
+  yvar <- all.vars(fit$fits$mono$formula$formula)[1]
+  xvar <- setdiff(names(fit$data), yvar)  
+  
+  raw <- fit$data %>%
+    dplyr::count(.data[[xvar]], .data[[yvar]]) %>%
+    group_by(.data[[xvar]]) %>%
+    mutate(prop = n / sum(n)) %>%
+    ungroup() %>%
+    rename(effect1__ = !!xvar, effect2__ = !!yvar)
+  
+  pal <- scales::viridis_pal(option = "D", end = .9)(nlevels(raw$effect2__))
+  names(pal) <- levels(raw$effect2__)
+  
+  tot <- raw %>%
+    group_by(effect1__) %>%
+    summarise(n = sum(n), top = max(prop), .groups = "drop")
+  
+  res_plot <- ggplot() +
+    geom_col(data = raw,
+             aes(effect1__, prop, fill = effect2__),
+             position = position_dodge(width = .8), width = .7,
+             alpha = .35, colour = NA) +
+    geom_text(data = tot,
+              aes(effect1__, top, label = paste0("n = ", n)),
+              vjust = -0.8, size = 3, colour = "grey30")+
+    geom_linerange(data = as.data.frame(fit$ce[[1]]),
+                   aes(effect1__, estimate__, ymin = lower__, ymax = upper__,
+                       color = effect2__),
+                   position = position_dodge(width = .8), size = .3) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = pal) +
+    scale_colour_manual(values = pal) +
+    labs(x = fit$x, y = paste0("P(", fit$y, " = k)"),
+         fill = fit$y, colour = fit$y) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+    scale_x_discrete(labels = scales::label_wrap(20))
+  return (res_plot)
+}
+
+
+# -------------------------------------------------
+# Run Likert Models
+# -------------------------------------------------
+# gen attitude as a function of career stage
 dat_q1 <- survey %>%
   filter(!gen_attitude %in% c("Other", "Indifferent"))
 
@@ -444,63 +493,12 @@ res_1 <- fit_likert_pair(dat_q1, x = "career_stage", y = "gen_attitude",
 res_1  <-load_likert_pair(x = "career_stage", y = "gen_attitude", 
 file_prefix = "fits/attitude_by_stage")
 
-yvar <- all.vars(res_1$fits$mono$formula$formula)[1]
-xvar <- setdiff(names(res_1$data), yvar)  
+res_1_plot <-make.likert.plot(res_1)
 
-raw_1 <- res_1$data %>%
-  dplyr::count(.data[[xvar]], .data[[yvar]]) %>%
-  group_by(.data[[xvar]]) %>%
-  mutate(prop = n / sum(n)) %>%
-  ungroup() %>%
-  rename(effect1__ = !!xvar, effect2__ = !!yvar)
-
-# improved aesthetics rather than the default
-# effects plots
-ce <- as.data.frame(res_1$ce[[1]])
-
-pal <- scales::viridis_pal(option = "D", end = .9)(nlevels(raw_1$effect2__))
-names(pal) <- levels(raw_1$effect2__)
-
-tot_1 <- raw_1 %>%
-  group_by(effect1__) %>%
-  summarise(n = sum(n), top = max(prop), .groups = "drop")
-ggplot() +
-  geom_col(data = raw_1,
-           aes(effect1__, prop, fill = effect2__),
-           position = position_dodge(width = .8), width = .7,
-           alpha = .35, colour = NA) +
-  geom_text(data = tot_1,
-            aes(effect1__, top, label = paste0("n = ", n)),
-            vjust = -0.8, size = 3, colour = "grey30")+
-  geom_linerange(data = ce,
-                  aes(effect1__, estimate__, ymin = lower__, ymax = upper__,
-                      color = effect2__),
-                  position = position_dodge(width = .8), size = .3) +
-  scale_y_continuous(labels = scales::percent) +
-  scale_fill_manual(values = pal) +
-  scale_colour_manual(values = pal) +
-  labs(x = res_1$x, y = paste0("P(", res_1$y, " = k)"),
-       fill = res_1$y, colour = res_1$y) +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
-  scale_x_discrete(labels = scales::label_wrap(20))
-
-
-
-
-res_1$ce_plot +
-  geom_col(data = raw_1, aes(x = effect1__, y = prop, fill = effect2__),
-           position = position_dodge(width = .8), width = .7,
-           alpha = .35)
-
-
-  geom_bar(data = raw_1,
-             aes(x = .data[[xvar]], y = prop, colour = .data[[yvar]]),
-             #shape = 4, size = 2.5, stroke = 1,
-             position = position_dodge(width = 0.4),
-             inherit.aes = FALSE) +
-  labs(caption = "crosses = observed proportions")
-
+ggsave(res_1_plot, filename = file.path("graphs",
+                                        "analysis_figs",
+                                        "gen_attitude_by_career.jpg"),
+       width =8, height =6)
 
 #examine output
 res_1$loo
@@ -510,6 +508,7 @@ plot_prior_post(res_1$prior_post$mono)
 res_1$prior_pc$mono
 
 
+# AI use frequency as a function of data science frequency
 dat_q2 <- survey %>%
   filter(grepl("Early", career_stage) &
     !is.na(ai_use_freq)&
@@ -526,6 +525,17 @@ res_2$loo
 res_2$ce_plot
 summary (res_2$fits$mono)
 
+res_2_plot <-make.likert.plot(res_2)
+
+# need to fix this for the 4 vs 5 pred categories
+ggsave(res_2_plot, filename = file.path("graphs",
+                                        "analysis_figs",
+                                        "early_career_dsfreq_by_ai_usefreq.jpg"),
+       width =8, height =6)
+
+
+
+# AI use frequency as a function of Institutional Policy
 #n = 140
 dat_q3<- survey %>%
   filter(grepl("Early", career_stage) &
@@ -537,30 +547,198 @@ dat_q3<- survey %>%
 res_3 <- fit_likert_pair(dat_q3, x = "policies", y = "ai_use_freq",
                        file_prefix = "fits/early_career_policies_by_ai_usefreq",
                         overwrite = TRUE)
-
+res_3 <-load_likert_pair(x = "policies", y = "ai_use_freq", 
+                         file_prefix = "fits/early_career_policies_by_ai_usefreq")
 res_3$loo
-res_3$ce_plot
 summary (res_3$fits$mono)
 
+res_3_plot <-make.likert.plot(res_3)
 
+ggsave(res_3_plot, filename =
+         file.path("graphs","analysis_figs", "early_career_policies_by_ai_usefreq.jpg"),
+       width =8, height =6)
+
+
+# -------------------------------------------------
+# Define functions for models with select all (Y)
+# Questions as a function of categorical x
+# Tried using monotonic x model but ran forever..
+# -------------------------------------------------
+
+# -------------------------------------------------
+# expand_select_all(): select-all-that-apply -> long
+#   one row per respondent x option, with Yes/No filled in
+# -------------------------------------------------
+expand_select_all <- function(survey, q, id_col = "response_id",
+                              keep_na_x = FALSE, x = NULL) {
+  
+  svy <- survey %>% rename(ResponseId = all_of(id_col))
+  
+  # the chosen options, one row per respondent x selected option
+  yes <- prep_select_all(svy, q = q, summarize = FALSE) %>%
+    rename(!!q := value) %>%
+    left_join(svy %>% select(-all_of(q)), by = "ResponseId") %>%
+    mutate(response = "Yes")
+  
+  if (nrow(yes) == 0) stop("prep_select_all() returned no rows for q = ", q)
+  
+  # every respondent x option combination that wasn't chosen
+  no <- tidyr::expand_grid(
+    ResponseId = unique(yes$ResponseId),
+    !!q := unique(yes[[q]])
+  ) %>%
+    anti_join(yes, by = c("ResponseId", q)) %>%
+    mutate(response = "No") %>%
+    left_join(svy %>% select(-all_of(q)), by = "ResponseId")
+  
+  out <- bind_rows(yes, no) %>%
+    mutate(question         = factor(make.names(as.character(.data[[q]]))),
+           response_numeric = as.integer(response == "Yes"))
+  
+  if (!is.null(x) && !keep_na_x)
+    out <- out %>% filter(!is.na(.data[[x]])) %>% droplevels()
+  
+  out
+}
+
+# -------------------------------------------------
+# fit_select_all(): GLMM + summaries + plot
+# -------------------------------------------------
+fit_select_all <- function(data, x, id = "ResponseId",
+                           wrap_facet = 25, wrap_axis = 20,
+                           verbose = TRUE) {
+  
+  stopifnot(all(c("question", "response_numeric", x, id) %in% names(data)))
+  data <- data %>% filter(!is.na(.data[[x]])) %>% droplevels()
+  
+  # sanity check before fitting
+  tab <- table(data[[x]], data$question)
+  if (any(tab == 0))
+    warning("Empty cells in ", x, " x question; estimates may be unstable.")
+  
+  form <- stats::as.formula(
+    sprintf("response_numeric ~ 0 + question + question:%s + (1 | %s)", x, id))
+  
+  fit <- lme4::glmer(form, family = binomial, data = data,
+                     control = lme4::glmerControl(optimizer = "bobyqa",
+                                                  optCtrl = list(maxfun = 2e5)))
+  
+  if (verbose) {
+    print(summary(fit))
+    m_red <- update(fit, stats::as.formula(paste(". ~ . - question:", x)))
+    print(anova(m_red, fit))
+    print(lme4::VarCorr(fit))
+    cat("singular:", lme4::isSingular(fit), "\n")
+    print(performance::icc(fit))
+  }
+  
+  emm <- as.data.frame(
+    emmeans::emmeans(fit, stats::as.formula(paste("~", x, "| question")),
+                     type = "response"))
+  
+  raw <- data %>%
+    group_by(question, .data[[x]]) %>%
+    summarise(prop = mean(response_numeric), n = n(), .groups = "drop")
+  
+  p <- ggplot(emm, aes(.data[[x]], prob)) +
+    geom_col(data = raw, aes(y = prop), fill = "grey85", width = .7) +
+    geom_pointrange(aes(ymin = asymp.LCL, ymax = asymp.UCL),
+                    colour = "firebrick", size = .3) +
+    geom_text(data = raw, aes(y = Inf, label = n),
+              vjust = 1.4, size = 2.6, colour = "grey40") +
+    facet_wrap(~ question, labeller = label_wrap_gen(wrap_facet)) +
+    scale_y_continuous(labels = scales::percent,
+                       expand = expansion(mult = c(.05, .12))) +
+    scale_x_discrete(labels = scales::label_wrap(wrap_axis)) +
+    labs(x = NULL, y = "P(yes)",
+         caption = "grey = observed; red = model estimate") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  list(x = x, n_obs = nrow(data), n_id = dplyr::n_distinct(data[[id]]),
+       data = data, fit = fit, emm = emm, raw = raw, plot = p,
+       cells = tab)
+}
+# Q1B: How do the opportunities of using genAI vary with career stage?
+opps_long <- expand_select_all(survey, q = "promising_opps", x = "career_stage")
+res_opps  <- fit_select_all(opps_long, x = "career_stage", verbose = TRUE)
+res_opps$plot
+ggsave(res_opps$plot, filename =
+         file.path("graphs","analysis_figs", "challenge_by_career.jpg"),
+       width =8, height =6)
+
+
+# Q1A: How do the challenges of using genAI vary with career stage?
+challenges_long <- expand_select_all(survey, q = "challenges", x = "career_stage")
+res_challenges  <- fit_select_all(challenges_long, x = "career_stage")
+res_challenges$plot
+
+ggsave(res_challenges$plot, filename =
+         file.path("graphs","analysis_figs", "challeng_by_career.jpg"), width =8, height =6)
+
+
+
+# gender
+m_gender <- clm(ai_use_freq ~ gender, data = survey %>%
+                  filter(!gender %in%c("Prefer not to answer",
+                                       "Prefer to self-identify")),
+                link = "probit")
+
+
+
+# AI use frequency as a function of gender among ECR
 dat_q4 <- survey %>%
   filter(grepl("Early", career_stage) &
-  !is.na(career_stage),
+           !is.na(career_stage),
          !gen_attitude %in% c("Other", "Indifferent"),
-        !is.na(gender) & gender != "Prefer not to answer") %>%
+         !is.na(gender) & gender != "Prefer not to answer") %>%
   droplevels()
 
+#SCE sort out this part
 # no effects of gender among early c
 res_4 <- ordinal::clm(gen_attitude ~ gender, data = dat_q4, link = "probit")
 # overall test of the predictor
 drop1(m, test = "Chisq")
 
-# Assumption checks
-# chsq nonsig so keep the simpler test
-res_4_nom  <- ordinal::clm(gen_attitude ~ 1, nominal = ~ gender, data = dat_q4, link = "probit")
-anova(res_4, res_4_nom)   
+ordinal::scale_test(res_4) # unequal variance: does the latent SD differ by stage?
 
-ordinal::scale_test(res_4)     # unequal variance: does the latent SD differ by stage?
 
-# stopped here 25 Sept 2026
+# ---- model estimates ----------------------------------------------------
+emm <- as.data.frame(
+  emmeans(m_gender, ~ ai_use_freq | gender, mode = "prob"))
+names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
+
+gender_tukey <- emmeans(m_gender, ~ gender, mode = "linear.predictor")
+pairs(gender_tukey, adjust = "tukey")
+
+# ---- observed proportions ----------------------------------------------
+raw <- survey %>%
+  filter(!gender %in%c("Prefer not to answer",
+                       "Prefer to self-identify")&
+           !is.na(gender)) %>%
+  dplyr::count(gender, ai_use_freq) %>%
+  group_by(gender) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+
+tot <- raw %>% group_by(gender) %>% summarise(n = sum(n), .groups = "drop")
+
+# ---- plot ---------------------------------------------------------------
+gender_plot <- ggplot(emm, aes(gender, prob)) +
+  geom_col(data = raw, aes(y = prop), fill = "grey85", width = .7) +
+  geom_pointrange(aes(ymin = asymp.LCL, ymax = asymp.UCL),
+                  colour = "firebrick", size = .3) +
+  geom_text(data = tot, aes(y = Inf, label = paste0("n = ", n)),
+            vjust = 1.4, size = 2.6, colour = "grey40") +
+  facet_wrap(~ ai_use_freq, nrow = 1, labeller = label_wrap_gen(20)) +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(.05, .12))) +
+  scale_x_discrete(labels = scales::label_wrap(12)) +
+  labs(x = NULL, y = "P(category)",
+       caption = "grey = observed; red = model estimate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave(gender_plot, filename =
+         file.path("graphs","analysis_figs", "ai_use_by_gender.jpg"), width =8, height =6)
 
