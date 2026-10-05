@@ -10,6 +10,10 @@
 # -------------------------------------------------
 # Project setup
 # -------------------------------------------------
+# TO DO 
+# deal with the inconsistencies in the re.formula implementation 
+# across brms vs emm in the predictions
+# https://github.com/easystats/modelbased/issues/579
 rm(list = ls())
 source(file.path("-setup.r"))          # clears environment, creates folders
 gc()                  # start with a clean workspace
@@ -126,6 +130,12 @@ survey <- survey %>%
 # Likert predictor (x) and Likert outcome (y)
 # Baysian monotonic effects with ordinal outcomes
 # Similar to Rasch models
+# Cumulative probit with a monotonic predictor 
+# Dirichlet prior on the simplex (spacing) parameter; weakly-informative
+# Normal(0,1) prior on the (probit-scale) monotonic coefficient b.
+# 
+# reference paper is here: Burkner and Charpentier 2020
+# https://doi.org/10.1111/bmsp.12195
 # -------------------------------------------------
 
 prior_post_draws <- function(fit_post, fit_prior,
@@ -180,8 +190,19 @@ diagnose_fit <- function(fit, tag, bulk_min = 400, tail_min = 400, rhat_max = 1.
   
   np <- brms::nuts_params(fit)
   div <- sum(np$Value[np$Parameter == "divergent__"])
-  tree <- sum(np$Value[np$Parameter == "treedepth__"] >=
-                (fit$fit@stan_args[[1]]$control$max_treedepth %||% 10))
+  max_td <- fit$fit@stan_args[[1]]$control$max_treedepth
+
+if (is.null(max_td)) {
+  max_td <- 10
+}
+
+tree <- sum(
+  np$Value[np$Parameter == "treedepth__"] >= max_td
+)
+
+
+  # tree <- sum(np$Value[np$Parameter == "treedepth__"] >=
+  #               (fit$fit@stan_args[[1]]$control$max_treedepth %||% 10))
   
   bad <- s |>
     dplyr::filter(rhat > rhat_max | ess_bulk < bulk_min | ess_tail < tail_min) |>
@@ -252,7 +273,8 @@ fit_likert_pair <- function(data, x, y,
 
   # ---- names built from the variables ----------------------------------
   simo_coef <- paste0("mo", x, "1")
-  b_sd_mono <- b_sd_fac / (K_x - 1)     # b is the per-step effect
+  #b_sd_mono <- b_sd_fac / (K_x - 1)     # b is the per-step effect
+  b_sd_mono <- b_sd_fac # b is the per-step effect
 
   f_mono <- brms::bf(stats::as.formula(sprintf("%s ~ mo(%s)", y, x)))
   f_fac  <- brms::bf(stats::as.formula(sprintf("%s ~ %s",     y, x)))
@@ -373,7 +395,9 @@ fit_likert_pair <- function(data, x, y,
     parameters = slope_draw #)
   )
 
-  ce <- brms::conditional_effects(fit_mono, categorical = TRUE)
+  #ce <- brms::conditional_effects(fit_mono, categorical = TRUE)
+  ce <- brms::conditional_effects(fit_mono, categorical = TRUE, re_formula = NULL)
+  
   ce_plot <- plot(ce, plot = FALSE)[[1]] +
     ggplot2::theme_bw() +
     ggplot2::labs(x = x, y = paste0("P(", y, " = k)")) +
@@ -438,7 +462,7 @@ load_likert_pair <- function(x, y,
   prior_post <- if (length(fits_prior))
     purrr::map2(fits[names(fits_prior)], fits_prior, prior_post_draws) else NULL
 
-  ce      <- brms::conditional_effects(fit_mono, categorical = TRUE)
+  ce      <- brms::conditional_effects(fit_mono, categorical = TRUE, re_formula = NULL)
   ce_plot <- plot(ce, plot = FALSE)[[1]] +
     ggplot2::theme_bw() +
     ggplot2::labs(x = x, y = paste0("P(", y, " = k)")) +
@@ -562,7 +586,7 @@ if (rerun_mods) {
 res_1 <- fit_likert_pair(dat_q1, x = "career_stage", y = "gen_attitude",
                        file_prefix = "fits/attitude_by_stage", overwrite = TRUE,
                        iter = n.iter,
-                       adapt_delta =)
+                       adapt_delta = n.adapt_delta)
 } else {
 # example can reload without fitting if you want to not rerun
   res_1  <-load_likert_pair(x = "career_stage", y = "gen_attitude", 
@@ -571,9 +595,7 @@ res_1 <- fit_likert_pair(dat_q1, x = "career_stage", y = "gen_attitude",
 
 res_1_plot <-make.likert.plot(res_1)
 
-ggsave(res_1_plot, filename = file.path("graphs",
-                                        "analysis_figs",
-                                        "gen_attitude_by_career.jpg"),
+ggsave(file.path("graphs","gen_attitude_by_career.jpg"), plot = res_1_plot, 
        width =8, height =6)
 
 #examine output
@@ -591,6 +613,12 @@ plot_prior_post(res_1$prior_post$mono)
 res_1$prior_pc$mono
 
 res_1$diagnostics
+
+########################
+# sanity check based on the Kurtz blog that you have the reference value right
+# otherwise non-identifiable if it's also estimating a b_disc_Intercept
+# https://solomonkurz.netlify.app/blog/2021-12-29-notes-on-the-bayesian-cumulative-probit/
+# grep("disc", variables(res_1$fits$ls), value = TRUE)
 
 ######################################################################
 # AI use frequency as a function of data science frequency
@@ -614,14 +642,20 @@ tab_ds_freq_career <- dat_q2 %>%
 
 tab_ds_freq_career
 
-# run as categorical first to test for interactions,
+# run polynomial contrasts first, finding none combined across career stages
 # with none, combine
-res_2 <- clm(ai_use_freq ~ ds_freq*career_stage, data = dat_q2,
+res_2_poly <- clm(ai_use_freq ~ ds_freq*career_stage, data = dat_q2,
              link = "probit")
 
-summary (res_2)
+res_2_cat <-clm(ai_use_freq ~ as.factor(ds_freq)*as.factor(career_stage), data = dat_q2,
+             link = "probit")
+
+# categorical and ordinal are not treated differently in clm
+anova (res_2_poly, res_2_cat)
+
+summary (res_2_cat)
 # marginal here
-anova(clm(ai_use_freq ~ ds_freq + career_stage, data = dat_q2 , link = "probit"), res_2)
+anova(clm(ai_use_freq ~ ds_freq + career_stage, data = dat_q2 , link = "probit"), res_2_cat)
 
 
 if (rerun_mods) {
@@ -659,7 +693,7 @@ res_2_plot <-make.likert.plot(res_2, pal_option = "C")
 #"Daily" = "#4575b4", "Weekly" = "#91bfdb", "Monthly" = "#ffffbf",
 #"Yearly" = "#fc8d59", "Never"  = "#d73027"))
 
-ggsave(res_2_plot, filename = file.path("graphs",
+ggsave(plot = res_2_plot, filename = file.path("graphs",
                                         "analysis_figs",
                                         "dsfreq_by_ai_usefreq.jpg"),
        width =8, height =6)
@@ -700,7 +734,7 @@ res_3$diagnostics
 #significant interaction but with some noise
 # in general people who do ds tasks more often use
 # AI more freq
-res_3_plot <-make.likert.plot(res_2, pal_option = "A")
+res_3_plot <-make.likert.plot(res_3, pal_option = "A")
 
 # if want to manually scale colors we can
 # make.likert.plot(res_3, palette = c(
@@ -708,7 +742,7 @@ res_3_plot <-make.likert.plot(res_2, pal_option = "A")
 #"Yearly" = "#fc8d59", "Never"  = "#d73027"))
 
 
-ggsave(res_3_plot, filename =
+ggsave(plot = res_3_plot, filename =
          file.path("graphs","analysis_figs", "policies_by_ai_usefreq.jpg"),
        width =8, height =6)
 
@@ -771,6 +805,11 @@ fit_select_all <- function(data, x, id = "ResponseId",
                            seed_mvt = 12345,
                            verbose = TRUE) {
   
+  # fit_select_all(challenges_long_attitude,
+  #                                         x = "gen_attitude",
+  #                                          verbose = TRUE)
+  
+  
   #fit_select_all(opps_long_career,
   #               x = "career_stage", verbose = TRUE)
   
@@ -779,6 +818,7 @@ fit_select_all <- function(data, x, id = "ResponseId",
   data <- data %>% filter(!is.na(.data[[x]])) %>% droplevels()
   
   # sanity check before fitting
+  # only 16 in the very enthusiastic category which may have some issues
   tab <- table(data[[x]], data$question)
   if (any(tab == 0))
     warning("Empty cells in ", x, " x question; estimates may be unstable.")
@@ -947,18 +987,6 @@ fit_select_all <- function(data, x, id = "ResponseId",
 opps_long_career <- expand_select_all(survey, q = "promising_opps",
                                       x = "career_stage")
 
-# redefine a few
-noopps_indivs <- opps_long_career %>%
-  filter(promising_opps_14_text %in% c(
-    "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
-    "There is no ethical way to use generative AI given its current ownership model",
-    "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
-  )
-  ) %>% dplyr::select(ResponseId) %>%
-  distinct() %>%
-  dplyr::pull(ResponseId)
-
-
 # fin
 noopps <- opps_long_career %>%
   dplyr::filter(grepl("None", promising_opps)&
@@ -1068,35 +1096,17 @@ saveRDS(res_opps_career, file.path('fits', 'res_opps_career.rds'))
 }
 
 res_opps_career$plot
-ggsave(res_opps_career$plot, filename =
+ggsave(plot = res_opps_career$plot, filename =
          file.path("graphs","analysis_figs", "opportunity_by_career.jpg"),
        width =15, height =14, scale =0.8)
 
 
 # Q1A: How do the challenges of using genAI vary with career stage?
-# "No challenges associated with using AI" 
-# SCE start HERE
-# will need to redo for challenges with the "other vs no"
-
 
 challenges_long_career <- expand_select_all(survey, q = "challenges",
                                             x = "career_stage")
 
-
-#############################
-# redefine a few - sce reset this one
-nochall_indivs <- challenges_long_career %>%
-  filter(challenges_15_text %in% c(
-    "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
-    "There is no ethical way to use generative AI given its current ownership model",
-    "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
-  )
-  ) %>% dplyr::select(ResponseId) %>%
-  distinct() %>%
-  dplyr::pull(ResponseId)
-
-
-# find those with no challenges
+# find those with no challenges (3)
 nochall_indivs <- challenges_long_career %>%
   dplyr::filter(grepl("^No", challenges)&
                   response == 'Yes')
@@ -1110,13 +1120,18 @@ yesIDs <- challenges_long_career %>% filter(response == "Yes") %>%
 conflicts <- unique(nochall_indivs$ResponseId[nochall_indivs$ResponseId %in%
                                         yesIDs])
 
+# View (challenges_long_career %>% filter(ResponseId %in% conflicts) %>%
+#   arrange(ResponseId) %>%
+#   select(ResponseId, challenges, response_numeric, challenges_15_text))
+
+# none for this one
 if(length(conflicts)>0){
   cat ("yes and no values conflict for ", length(conflicts))
   challenges_long_career <- challenges_long_career %>%
     dplyr::filter(!ResponseId %in% conflicts)
 }
 
-# at some point we probably want to characterize these there are a lot
+# as nec can reassign
 # View (challenges_long_career %>%
 #         filter(challenges == 'Other') %>%
 #         select(challenges_15_text))
@@ -1132,14 +1147,80 @@ saveRDS(res_challenges_career, file.path('fits', 'res_challenges_career.rds'))
 
 res_challenges_career$plot
 
-ggsave(res_challenges_career$plot, filename =
+ggsave(plot = res_challenges_career$plot, filename =
          file.path("graphs","analysis_figs", "challenges_by_career.jpg"),
        width =15, height =14, scale =0.8)
 
-#SCE start HERE
-# how do opportunities vary with attitude
 
-opps_long_attitude <- expand_select_all(survey, q = "promising_opps", x = "gen_attitude")
+# Q: how do opportunities vary with attitude
+
+opps_long_attitude <- expand_select_all(survey %>%
+  filter(!gen_attitude %in% c("Other", "Indifferent")), q = "promising_opps", x = "gen_attitude")
+
+# find conflicts
+noopps <- opps_long_attitude %>%
+  dplyr::filter(grepl("None", promising_opps)&
+                  response == 'Yes')
+
+opps_long_attitude <- opps_long_attitude %>%
+  dplyr::filter(!grepl("None", promising_opps))
+
+#reassign a few based on 'other' response
+noopps_indivs <- opps_long_attitude %>%
+  filter(promising_opps_14_text %in% c(
+    "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
+    "There is no ethical way to use generative AI given its current ownership model",
+    "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
+  )
+  ) %>% dplyr::select(ResponseId) %>%
+  distinct() %>%
+  dplyr::pull(ResponseId)
+
+some_opps_indivs <- opps_long_attitude %>%
+  filter(promising_opps_14_text %in% c(
+    "faster work (does not equal quality work)."  
+  ))%>% dplyr::select(ResponseId) %>%
+  distinct() %>%
+  dplyr::pull(ResponseId)
+
+opps_long_attitude  <- opps_long_attitude %>%
+  mutate(response = 
+           ifelse (promising_opps == 'Other' & ResponseId %in% noopps_indivs, 'No', response),
+         response_numeric = 
+           ifelse (promising_opps == 'Other' & ResponseId %in% noopps_indivs, 0, response_numeric)
+)
+
+noopps <- noopps %>%
+  filter(!ResponseId %in% some_opps_indivs)
+      
+yesIDs <- opps_long_attitude %>% filter(response == "Yes") %>%
+  dplyr::pull(ResponseId)
+
+conflicts <- unique(noopps$ResponseId[noopps$ResponseId %in%
+                                        yesIDs])
+
+# this person picked 2 and also 'no opportunities'; drop
+# View (opps_long_attitude %>% filter(ResponseId %in% (conflicts))%>%
+#         arrange(ResponseId, promising_opps, promising_opps_14_text, response) %>%
+#         select(ResponseId, promising_opps, promising_opps_14_text, response)
+# )
+
+if(length(conflicts)>0){
+  cat ("yes and no values conflict for ", length(conflicts))
+  opps_long_attitude <-opps_long_attitude %>%
+    dplyr::filter(!ResponseId %in% conflicts)
+}
+
+# can keep this if we want to report on how many people actually said no opps
+#   noopps <- opps_long_attitude %>%
+#     dplyr::filter(grepl("None", promising_opps))%>%
+#     dplyr::filter(!ResponseId %in% conflicts)
+# } else {
+#   noopps <- opps_long_attitude %>%
+#     dplyr::filter(grepl("None", promising_opps))
+# }
+
+
 if (rerun_mods){
 res_opps_attitude <- fit_select_all(opps_long_attitude, x = "gen_attitude",
                                           verbose = TRUE)
@@ -1148,137 +1229,42 @@ saveRDS(res_opps_attitude, file.path('fits', 'res_opps_attitude.rds'))
   res_opps_attitude <-readRDS(file.path('fits', 'res_opps_attitude.rds'))
 }
 res_opps_attitude$plot
-ggsave(res_opps_attitude, filename =
+ggsave(plot = res_opps_attitude$plot, filename =
          file.path("graphs","analysis_figs", "opportunity_by_attitude.jpg"),
-       width =8, height =6)
+       width =15, height =14, scale =0.8)
 
 
 # how do challenges vary with attitude
 # Q: How do the challenges of using genAI vary with attitude?
-challenges_long_attitude <- expand_select_all(survey, q = "challenges",
+challenges_long_attitude <- expand_select_all(survey %>%
+  filter(!gen_attitude %in% c("Other", "Indifferent")) , q = "challenges",
                                               x = "gen_attitude")
 
-
-#############################
-# redefine a few - sce reset this one
+# find those with no challenges (3)
 nochall_indivs <- challenges_long_attitude %>%
-  filter(promising_opps_14_text %in% c(
-    "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
-    "There is no ethical way to use generative AI given its current ownership model",
-    "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
-  )
-  ) %>% dplyr::select(ResponseId) %>%
-  distinct() %>%
-  dplyr::pull(ResponseId)
-
-
-# find those with no challenges
-nochall_indivs <- challenges_long_attitude %>%
-  dplyr::filter(grepl("None", challenges)&
+  dplyr::filter(grepl("^No", challenges)&
                   response == 'Yes')
 
 challenges_long_attitude <- challenges_long_attitude %>%
-  dplyr::filter(!grepl("None", challenges))
+  dplyr::filter(!grepl("^No", challenges))
 
-#sce reset this one
-noopps_indivs <- opps_long_career %>%
-  filter(promising_opps_14_text %in% c(
-    "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
-    "There is no ethical way to use generative AI given its current ownership model",
-    "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
-  )
-  ) %>% dplyr::select(ResponseId) %>%
-  distinct() %>%
+yesIDs <- challenges_long_attitude %>% filter(response == "Yes") %>%
   dplyr::pull(ResponseId)
 
-some_opps_indivs <- opps_long_career %>%
-  filter(promising_opps_14_text %in% c(
-    "faster work (does not equal quality work)."  
-  ))%>% dplyr::select(ResponseId) %>%
-  distinct() %>%
-  dplyr::pull(ResponseId)
-
-opps_long_career <- opps_long_career %>%
-  mutate(response = 
-           ifelse (promising_opps == 'Other' & ResponseId %in% noopps_indivs, 'No', response),
-         response_numeric = 
-           ifelse (promising_opps == 'Other' & ResponseId %in% noopps_indivs, 0, response_numeric)
-  )
-
-noopps <- noopps %>%
-  filter(!ResponseId %in% some_opps_indivs)
-
-yesIDs <- opps_long_career %>% filter(response == "Yes") %>%
-  dplyr::pull(ResponseId)
-
-conflicts <- unique(noopps$ResponseId[noopps$ResponseId %in%
+conflicts <- unique(nochall_indivs$ResponseId[nochall_indivs$ResponseId %in%
                                         yesIDs])
 
-# this person picked 2 and also 'no opportunities'; drop
-# View (opps_long_career %>% filter(ResponseId %in% (conflicts))%>%
-#         arrange(ResponseId, promising_opps, promising_opps_14_text, response) %>%
-#         select(ResponseId, promising_opps, promising_opps_14_text, response)
-# )
+# View (challenges_long_attitude %>% filter(ResponseId %in% conflicts) %>%
+#   arrange(ResponseId) %>%
+#   select(ResponseId, challenges, response_numeric, challenges_15_text))
 
+# none for this one
 if(length(conflicts)>0){
   cat ("yes and no values conflict for ", length(conflicts))
-  opps_long_career <-opps_long_career %>%
+  challenges_long_attitude <- challenges_long_attitude %>%
     dplyr::filter(!ResponseId %in% conflicts)
 }
 
-# can keep this if we want to report on how many people actually said no opps
-#   noopps <- opps_long_career %>%
-#     dplyr::filter(grepl("None", promising_opps))%>%
-#     dplyr::filter(!ResponseId %in% conflicts)
-# } else {
-#   noopps <- opps_long_career %>%
-#     dplyr::filter(grepl("None", promising_opps))
-# }
-
-# # check for any conflicts whether ALL they selected was "Other"
-# check_other <- opps_long_career %>%
-#   dplyr::filter(ResponseId %in% conflicts) %>%
-#   dplyr::group_by(ResponseId) %>%
-#   dplyr::summarize(
-#     ct_yes   = sum(response_numeric),
-#     ct_other = sum(response_numeric[.data[['promising_opps']] == "Other"]),
-#     .groups  = "drop"
-#   ) %>%
-#   left_join(., opps_long_career) %>%
-#   arrange(ResponseId, promising_opps, promising_opps_14_text, response) %>%
-#   select(ResponseId, promising_opps, promising_opps_14_text, response)
-# 
-# # sanity check what the 'no opps and other' said
-# unique (check_other$promising_opps_14_text)
-# 
-# noopps_indivs <- opps_long_career %>%
-#   filter(promising_opps_14_text %in% c(
-#     "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
-#     "There is no ethical way to use generative AI given its current ownership model",
-#     "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
-#   )
-#   ) %>% dplyr::select(ResponseId) %>%
-#   distinct() %>%
-#   dplyr::pull(ResponseId)
-# 
-# opps_long_career <-opps_long_career %>%
-#   mutate(response = ifelse(ResponseId %in% (noopps_indivs), 'No', response),
-#          response_numeric = ifelse(ResponseID %in% (noopps_indivs), 'No', response_numeric))
-# 
-# some_opps_indivs <- opps_long_career %>%
-#   filter(promising_opps_14_text %in% c(
-#     "faster work (does not equal quality work)."  
-#   ))%>% dplyr::select(ResponseId) %>%
-#     distinct() %>%
-#     dplyr::pull(ResponseId)
-
-
-
-
-
-
-
-#################
 if (rerun_mods){
 res_challenges_attitude <- fit_select_all(challenges_long_attitude,
                                           x = "gen_attitude",
@@ -1288,9 +1274,9 @@ saveRDS(res_challenges_attitude, file.path('fits', 'res_challenges_attitude'))
   res_challenges_attitude <-readRDS(file.path('fits', 'res_challenges_attitude'))
 }
 res_challenges_attitude$plot
-ggsave(res_challenges_attitude$plot, filename =
+ggsave(plot = res_challenges_attitude$plot, filename =
          file.path("graphs","analysis_figs", "challenges_by_attitude.jpg"),
-       width =8, height =6)
+       width =15, height =14, scale =0.8)
 
 # AI use frequency as a function of gender
 # first ask - do we have even gender splits across career stages?
@@ -1321,9 +1307,9 @@ dat_q4a <- survey %>%
 
 # no interactions between gender and career stage so can test separately
 # using max sample sizes for each
-res_4 <- clm(ai_use_freq ~ gender*career_stage, data = dat_q4a,
+res_4_int <- clm(ai_use_freq ~ gender*career_stage, data = dat_q4a,
              link = "probit")
-anova(clm(ai_use_freq ~ gender + career_stage, data = dat_q4a, link = "probit"), res_4)
+anova(clm(ai_use_freq ~ gender + career_stage, data = dat_q4a, link = "probit"), res_4_int)
 
 #run combining over career stages to maximize sample n
 dat_q4 <- survey %>%
@@ -1348,6 +1334,15 @@ confint(pairs(emmeans(res_4, ~ gender, mode = "linear.predictor")))
 emm <- as.data.frame(
   emmeans(res_4, ~ ai_use_freq | gender, mode = "prob"))
 names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
+
+emm <- as.data.frame(
+  marginaleffects::avg_predictions(res_4, ~ ai_use_freq | gender, mode = "prob"))
+names(emm)   # check: prob + asymp.LCL/asymp.UCL or lower.CL/upper.CL
+
+emm <-emm %>%
+  mutate(ai_use_freq = factor(as.character(ai_use_freq),
+ levels = levels(dat_q4$ai_use_freq),
+  ordered = TRUE))
 
 gender_tukey <- emmeans(res_4, ~ gender, mode = "linear.predictor")
 pairs(gender_tukey, adjust = "tukey")
@@ -1377,6 +1372,9 @@ gender_plot <- ggplot(emm, aes(gender, prob)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-ggsave(gender_plot, filename =
+ggsave(plot = gender_plot, filename =
          file.path("graphs","analysis_figs", "ai_use_by_gender.jpg"), width =8, height =6)
+
+
+
 
