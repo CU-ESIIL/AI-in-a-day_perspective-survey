@@ -32,8 +32,6 @@ set.seed(1)                            # reproducibility for anything stochastic
 # summarise_likert_pair() call, so the two paths cannot drift apart.
 rerun_mods <- TRUE
 
-check_lin
-
 # ------------------------------------------------------------------
 # CRAN mirror, so librarian::shelf installs without prompting
 # ------------------------------------------------------------------
@@ -438,6 +436,11 @@ print.ordinal_by <- function(z, ...) {
 # reported per decade) rather than standardising - the SD of a predictor
 # is a property of the sample, not of the quantity.
 # =================================================================
+# try(fit_ordinal_by_continuous(dat, x = demo$var, y = ord$y,
+#                                   covariate = cov, min_distinct_x = 3,
+#                                   verbose = verbose), silent = TRUE)
+
+
 fit_ordinal_by_continuous <- function(data, x, y,
                                       covariate       = "career_stage",
                                       link            = "probit",
@@ -807,11 +810,33 @@ clean_select_all <- function(long, q, none_pattern,
                        #    q_type = "q_type", re_structure = "correlated")
 
 
+# fit_select_all(long, x = x, re.form = re_forms[[nm]], ...), f)
+
 fit_select_all <- function(data, x, id = "ResponseId",
-                        q_type = NULL,          # column grouping questions
-                         re_structure = c("nested", "correlated", "uncorrelated"),
+                           q_type = NULL,          # column grouping questions
+                           re_structure = NULL,
+                           # "continuous"  force continuous; an ordered or
+                           #               unordered factor is coerced with a
+                           #               warning (see .as_numeric_x below)
+                           # "categorical" force categorical; a numeric is
+                           #               coerced to an unordered factor
+                           x_type = c("continuous", "categorical"),
+                           # below this many distinct values a continuous x is
+                           # warned about but still fitted as continuous
+                           min_distinct_x = 4,
+                           # at or below this, model predictions are taken at
+                           # the OBSERVED x values (so re.form is honoured);
+                           # above it, a smooth grid is used with re.form = NA
+                           grid_threshold = 15,
+                           n_grid = 100,
+                           # ------------------------------------------------
+
                            wrap_facet = 25, wrap_axis = 20,
                            order_facets = TRUE,
+                           # ignored when x is continuous: a compact letter
+                           # display compares groups, and a covariate has
+                           # none. Per-question slopes are returned in
+                           # $trends instead, and $cld stays NULL.
                            add_letters  = TRUE,
                            letter_adjust = "mvt",  # accounts for the
                            # correlation among contrasts; "sidak" assumes
@@ -825,26 +850,143 @@ fit_select_all <- function(data, x, id = "ResponseId",
   stopifnot(all(c("question", "response_numeric", x, id) %in% names(data)))
   data <- data %>% dplyr::filter(!is.na(.data[[x]])) %>% droplevels()
 
-  # sanity check before fitting
-  # make sure there are some individuals in every x group
-  tab <- table(data[[x]], data$question)
-  if (any(tab == 0))
-    warning("Empty cells in ", x, " x question; estimates may be unstable.")
+  # =================================================================
+  # DECIDE AND ENFORCE THE TYPE OF x
+  # =================================================================
+  # Everything downstream - the empty-cell check, emmeans, the letter
+  # join, the x scale - branches on this one flag. Previously the model
+  # was fitted continuously while every summary treated x as a factor,
+  # and `levels()` of a numeric being NULL turned the join key to NA.
+  x_type <- match.arg(x_type)
+
+  # numeric-looking levels ("0", "1", "2") become those numbers; otherwise
+  # the level INDEX is used, which assumes equal spacing between levels
+  .as_numeric_x <- function(v, nm) {
+    if (is.numeric(v)) return(v)
+    lab <- as.character(v)
+    num <- suppressWarnings(as.numeric(lab))
+    if (!any(is.na(num))) {
+      warning(nm, " is a ", class(v)[1],
+              " with numeric labels; using those values as the scale.",
+              call. = FALSE)
+      return(num)
+    }
+    warning(nm, " is a ", class(v)[1],
+            " without numeric labels; using the level index (1..",
+            nlevels(factor(v)), ") and so ASSUMING equal spacing ",
+            "between adjacent levels.", call. = FALSE)
+    as.integer(factor(v, levels = levels(factor(v))))
+  }
+
+  x_was_coerced <- FALSE
+
+  if (x_type == "continuous") {
+    if (!is.numeric(data[[x]])) {
+      data[[x]] <- .as_numeric_x(data[[x]], x)
+      x_was_coerced <- TRUE
+    }
+    n_distinct_x <- dplyr::n_distinct(data[[x]])
+    if (n_distinct_x < min_distinct_x)
+      warning(x, " takes only ", n_distinct_x, " distinct values; a ",
+              "continuous slope is fitted but x_type = \"categorical\" ",
+              "may describe the data better.", call. = FALSE)
+  } else {
+    if (is.numeric(data[[x]])) {
+      data[[x]] <- factor(data[[x]])          # ordered -> unordered on purpose:
+      x_was_coerced <- TRUE                   # treatment contrasts, not poly
+    } else if (is.ordered(data[[x]])) {
+      # an ordered factor in a glmer gets POLYNOMIAL contrasts, so the
+      # "linear" coefficient is an orthogonal polynomial term, not a
+      # per-level contrast. Drop the ordering to get treatment contrasts.
+      # this affects only the coefficients tables not the predictions or overall
+      # model stats itsself
+      data[[x]] <- factor(data[[x]], levels = levels(data[[x]]),
+                          ordered = FALSE)
+      x_was_coerced <- TRUE
+    } else {
+      data[[x]] <- factor(data[[x]])
+    }
+    n_distinct_x <- nlevels(data[[x]])
+  }
+
+  is_cont <- identical(x_type, "continuous")
+
+  # convenience: NULL for continuous, so the old `levels(data[[x]])` calls
+  # can be replaced by this and guarded on it
+  x_levels <- if (is_cont) NULL else levels(data[[x]])
+
+  # =================================================================
+  # SANITY CHECK BEFORE FITTING
+  # =================================================================
+  # A crosstab is only meaningful for a factor. For a continuous x the
+  # equivalent question is whether every question spans enough of the x
+  # range to estimate a slope.
+  if (is_cont) {
+    tab <- data %>%
+      dplyr::group_by(question) %>%
+      dplyr::summarise(n = dplyr::n(),
+                       n_distinct_x = dplyr::n_distinct(.data[[x]]),
+                       min_x = min(.data[[x]]), max_x = max(.data[[x]]),
+                       n_yes = sum(response_numeric),
+                       .groups = "drop")
+
+    thin <- dplyr::filter(tab, n_distinct_x < 2)
+    if (nrow(thin))
+      warning("No variation in ", x, " within: ",
+              paste(thin$question, collapse = ", "),
+              "; the question-specific slope is not estimable.",
+              call. = FALSE)
+
+    # a question answered "yes" by everyone or no one gives a separated
+    # slope, which is the usual cause of a huge SE or a Hessian warning
+    flat <- dplyr::filter(tab, n_yes == 0 | n_yes == n)
+    if (nrow(flat))
+      warning("No variation in the RESPONSE within: ",
+              paste(flat$question, collapse = ", "),
+              "; the slope is separated.", call. = FALSE)
+  } else {
+    # make sure there are some individuals in every x group
+    tab <- table(data[[x]], data$question)
+    if (any(tab == 0))
+      warning("Empty cells in ", x, " x question; estimates may be unstable.")
+  }
 
   # `question * x` rather than `0 + question + question:x`: identical fit,
   # but prediction helpers, drop1() and type-III tests all behave.
   # form <- stats::as.formula(
   #   sprintf("response_numeric ~ question * %s + (1 | %s)", x, id))
-  
-  re_structure <- match.arg(re_structure)
+
+  re_choices <- c("nested", "correlated", "uncorrelated")
+
+  if (is.null(q_type)) {
+    # the RE term is always (1 | id) with no q_type, so no structure applies
+    if (!is.null(re_structure))
+      warning("re_structure is ignored when q_type is NULL; the ",
+              "random-effect term is (1 | ", id, ").", call. = FALSE)
+    re_structure <- NA_character_
+
+  } else {
+    if (is.null(re_structure))
+      stop("q_type = \"", q_type, "\" requires an explicit re_structure, ",
+           "one of: ", paste(re_choices, collapse = ", "),
+           ".\nThey differ in the between-type correlation they permit, ",
+           "which is a substantive choice, so there is no default.",
+          call. = FALSE)
+
+    if (!is.character(re_structure) || length(re_structure) != 1L ||
+        is.na(re_structure) || !re_structure %in% re_choices)
+      stop("re_structure must be exactly one of: ",
+           paste(re_choices, collapse = ", "), ".\nGot: ",
+           paste(deparse(re_structure), collapse = " "), call. = FALSE)
+  }
 
   # with correlated you get  (0 + q_type | ResponseId), which I think is what you want
   # eg we expect people with a lot of neg reasons will find fewer positive reasons
   # with uncorrelated you get  (0 + q_type || ResponseId)
 
   # engagement plus idiosyncratic leanings,
-  # ie some people are just box tickers b
-   # with nested you get  (1 | ResponseId) + (1 | ResponseId:q_type)
+  # ie some people are just box tickers
+  # with nested you get  (1 | ResponseId) + (1 | ResponseId:q_type)
 
   re_term <- if (is.null(q_type)) {
     sprintf("(1 | %s)", id)
@@ -853,13 +995,17 @@ fit_select_all <- function(data, x, id = "ResponseId",
     # each question must belong to exactly one type, or the nesting is
     # not well defined
     tt <- table(data$question, data[[q_type]])
-   if (any(apply(tt, 1, \(r) sum(r > 0)) != 1))
-     stop("Each question must map to exactly one level of ", q_type, ".")
+    if (any(apply(tt, 1, \(r) sum(r > 0)) != 1))
+      stop("Each question must map to exactly one level of ", q_type, ".")
 
     switch(re_structure,
-     nested       = sprintf("(1 | %s) + (1 | %s:%s)", id, id, q_type),
-      correlated   = sprintf("(0 + %s | %s)",  q_type, id),
-      uncorrelated = sprintf("(0 + %s || %s)", q_type, id))
+           nested       = sprintf("(1 | %s) + (1 | %s:%s)", id, id, q_type),
+           by_type      = sprintf("(1 | %s:%s)", id, q_type),
+           correlated   = sprintf("(0 + %s | %s)",  q_type, id),
+           uncorrelated = sprintf("(0 + %s || %s)", q_type, id),
+           #switch() returns
+           # NULL invisibly on no match, which would fail obscurely later
+            stop("unhandled re_structure: ", re_structure, call. = FALSE))
   }
 
   form <- stats::as.formula(
@@ -873,13 +1019,14 @@ fit_select_all <- function(data, x, id = "ResponseId",
   # only the interaction.
   chisq_test <- drop1(fit, test = "Chisq")
 
-    # ---- omnibus test on total endorsements per person -------------
+  # ---- omnibus test on total endorsements per person -------------
   # Collapses the item-level data to counts: "how many boxes did you tick,
   # out of those offered?" rather than "which ones". A sum of Bernoullis
   # sharing one probability IS a Binomial, so this is the same likelihood
   # as the item-level model minus any item-specific term. cbind(k, n - k)
   # supplies the correct denominator when types hold different numbers of
   # items - a raw count would make the larger type look higher by default.
+  # For a continuous x: the term is then a slope.
   omni <- NULL
 
   if (is.null(q_type)) {
@@ -943,6 +1090,9 @@ fit_select_all <- function(data, x, id = "ResponseId",
   }
 
   if (verbose) {
+    cat("\n--- x treated as ", x_type,
+        if (x_was_coerced) " (coerced) " else " ",
+        "---\n", sep = "")
     print(summary(fit))
     print(chisq_test)
     print(lme4::VarCorr(fit))
@@ -951,7 +1101,7 @@ fit_select_all <- function(data, x, id = "ResponseId",
     # nested term the variance decomposition is not a single number, so
     # report VarCorr instead and interpret the correlations directly.
     if (is.null(q_type)) print(performance::icc(fit))
-    
+
     cat("\n--- omnibus test on total endorsements (", omni$kind, ") ---\n", sep = "")
     if (omni$kind == "binomial_glm") {
       cat("dispersion:", round(omni$dispersion, 2), "\n")
@@ -963,24 +1113,58 @@ fit_select_all <- function(data, x, id = "ResponseId",
     }
   }
 
-  # Predictions. re.form = NULL uses the fitted random effects and averages,
-  # giving the POPULATION-AVERAGE probability that is comparable to the
-  # observed bars. re.form = NA sets them to zero, giving the prediction
-  # for a TYPICAL respondent, which on a nonlinear link is pulled away from
-  # the raw proportions (more so the further from 50%).
+  # =================================================================
+  # PREDICTIONS
+  # =================================================================
+  # re.form = NULL uses the fitted random effects and averages, giving the
+  # probability that is comparable to the observed bars.
+  # re.form = NA sets them to zero, giving the prediction for a TYPICAL
+  # respondent, which on a nonlinear link is pulled away from the raw
+  # proportions (more so the further from 50%).
   # Caveat: with re.form = NULL the intervals reflect fixed-effect
   # uncertainty only - marginaleffects warns about this.
-  emm <- as.data.frame(
-    marginaleffects::avg_predictions(
-      fit, by = c("question", x), re.form = re.form)) %>%
-    dplyr::rename(prob = estimate, asymp.LCL = conf.low, asymp.UCL = conf.high)
+  #
+  # For a continuous x with few distinct values, predicting AT those values
+  # keeps re.form meaningful (it averages over the real respondents). With
+  # many distinct values a smooth grid is needed instead, and averaging
+  # over respondents at every grid point is prohibitive, so re.form = NA
+  # is used and the caption says so.
+  pred_at_observed <- !is_cont || n_distinct_x <= grid_threshold
 
-  # ---- compact letter display per question -----------------------
-  # Pairwise contrasts WITHIN each question; groups sharing a letter do
-  # not differ. No adjustment ACROSS questions - each item is treated as
-  # its own family, which must be stated in the methods.
-  cld_df <- NULL
-  if (add_letters) {
+  if (pred_at_observed) {
+    emm <- as.data.frame(
+      marginaleffects::avg_predictions(
+        fit, by = c("question", x), re.form = re.form)) %>%
+      dplyr::rename(prob = estimate, asymp.LCL = conf.low, asymp.UCL = conf.high)
+    pred_re_form <- re.form
+  } else {
+    x_grid <- seq(min(data[[x]]), max(data[[x]]), length.out = n_grid)
+    # datagrid() does not accept dynamic dots, so the x column is named
+    # through setNames rather than `!!x :=`
+    nd <- do.call(
+      marginaleffects::datagrid,
+      c(list(model = fit, question = unique(as.character(data$question))),
+        stats::setNames(list(x_grid), x)))
+
+    emm <- as.data.frame(
+      marginaleffects::predictions(fit, newdata = nd, re.form = NA)) %>%
+      dplyr::rename(prob = estimate, asymp.LCL = conf.low, asymp.UCL = conf.high)
+    pred_re_form <- NA
+  }
+
+  # =================================================================
+  # CONTRASTS: letters for categorical, slopes for continuous
+  # =================================================================
+  # Mutually exclusive by design: cld_df is populated only for a
+  # categorical x, trends_df only for a continuous one.
+  cld_df    <- NULL     # categorical: letter display, joined onto `raw`
+  trends_df <- NULL     # continuous: one slope per question, annotated
+
+  if (add_letters && !is_cont) {
+
+    # Pairwise contrasts WITHIN each question; groups sharing a letter do
+    # not differ. No adjustment ACROSS questions - each item is treated as
+    # its own family, which must be stated in the methods.
     emm_link <- emmeans::emmeans(
       fit, stats::as.formula(paste("~", x, "| question")),
       nesting = NULL)                   # treat x and question as crossed
@@ -999,12 +1183,11 @@ fit_select_all <- function(data, x, id = "ResponseId",
               attr(cld_df, "condition")$message)
       cld_df <- NULL
     } else {
-      lv <- levels(data[[x]])
       cld_df <- as.data.frame(cld_df) |>
         dplyr::mutate(
           .group = trimws(.group),
           dplyr::across(dplyr::all_of(x),
-                        \(z) factor(as.character(z), levels = lv))) |>
+                        \(z) factor(as.character(z), levels = x_levels))) |>
         dplyr::group_by(question) |>
         # blank the letters where nothing differs, so panels stay readable
         dplyr::mutate(.group = if (dplyr::n_distinct(.group) == 1) "" else .group) |>
@@ -1012,17 +1195,57 @@ fit_select_all <- function(data, x, id = "ResponseId",
     }
   }
 
+  if (is_cont) {
+    # A compact letter display is meaningless against a covariate - there
+    # are no groups to compare. The analogous quantity is the slope of the
+    # logit on x WITHIN each question, which is exactly the question:x
+    # interaction re-expressed per question.
+    tr <- try(
+      emmeans::emtrends(fit, ~ question, var = x, nesting = NULL),
+      silent = TRUE)
+
+    if (inherits(tr, "try-error")) {
+      warning("emtrends() failed; skipping per-question slopes. ",
+              attr(tr, "condition")$message)
+    } else {
+      trends_df <- as.data.frame(
+        summary(tr, infer = c(TRUE, TRUE), adjust = "fdr")) |>
+        dplyr::rename(slope = dplyr::matches("\\.trend$")) |>
+        dplyr::mutate(
+          question = as.character(question),
+          # odds ratio per one-unit step in x, which is what to report
+          OR    = exp(slope),
+          stars = dplyr::case_when(p.value < .001 ~ "***",
+                                   p.value < .01  ~ "**",
+                                   p.value < .05  ~ "*",
+                                   TRUE           ~ ""),
+          label = sprintf("OR %.2f%s", OR, stars))
+
+      # No compact letter display here. A CLD answers "which GROUPS of x
+      # differ", and a covariate has no groups. Letters on the slopes would
+      # answer a different question entirely (which ITEMS respond most
+      # steeply to x), so putting them in $cld would invite them to be read
+      # as if they meant the same thing as in the categorical case.
+      # $trends carries the per-question slope and its test instead.
+    }
+  }
+
+  # =================================================================
+  # OBSERVED PROPORTIONS
+  # =================================================================
   raw <- data %>%
     dplyr::group_by(question, .data[[x]]) %>%
     dplyr::summarise(prop = mean(response_numeric), n = dplyr::n(),
                      .groups = "drop")
 
-  # cast both key columns to the same type before joining: cld() returns
-  # a plain factor and character question, raw has ordered / factor
-  if (!is.null(cld_df)) {
-    lv <- levels(data[[x]])
+  # Cast both key columns to the same type before joining: cld() returns a
+  # plain factor and character question, raw has ordered / factor.
+  # CATEGORICAL ONLY - the old version ran this unconditionally, and with a
+  # numeric x `levels()` is NULL, so factor(..., levels = NULL) turned the
+  # whole column into NA and silently broke the join.
+  if (!is_cont && !is.null(cld_df)) {
     harmonise <- function(d) {
-      d[[x]] <- factor(as.character(d[[x]]), levels = lv)
+      d[[x]] <- factor(as.character(d[[x]]), levels = x_levels)
       d$question <- as.character(d$question)
       d
     }
@@ -1033,6 +1256,11 @@ fit_select_all <- function(data, x, id = "ResponseId",
     raw <- raw %>%
       dplyr::left_join(cld_df %>% dplyr::select(question, dplyr::all_of(x), .group),
                        by = c("question", x))
+  } else if (is_cont) {
+    # keep the join keys aligned without touching the numeric x
+    raw$question <- as.character(raw$question)
+    emm$question <- as.character(emm$question)
+    emm[[x]]     <- as.numeric(emm[[x]])
   }
 
   # ---- facet order: highest overall P(yes) first -----------------
@@ -1051,50 +1279,108 @@ fit_select_all <- function(data, x, id = "ResponseId",
     lv_q <- as.character(ord$question)
     emm$question <- factor(as.character(emm$question), levels = lv_q)
     raw$question <- factor(as.character(raw$question), levels = lv_q)
+    if (!is.null(trends_df))
+      trends_df$question <- factor(trends_df$question, levels = lv_q)
+  } else if (!is.null(trends_df)) {
+    trends_df$question <- factor(trends_df$question,
+                                 levels = levels(factor(raw$question)))
   }
 
-  cap_model <- if (is.null(re.form))
+  cap_model <- if (is.null(pred_re_form))
     "red = model estimate (population average)"
-  else if (length(re.form) == 1 && is.na(re.form))
+  else if (length(pred_re_form) == 1 && is.na(pred_re_form))
     "red = model estimate (typical respondent, random effects = 0)"
   else
     "red = model estimate"
 
-  p <- ggplot2::ggplot(emm, ggplot2::aes(.data[[x]], prob)) +
-    ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
-                      fill = "grey85", width = .7) +
-    ggplot2::geom_pointrange(
-      ggplot2::aes(ymin = asymp.LCL, ymax = asymp.UCL),
-      colour = "firebrick", size = .3) +
-    ggplot2::geom_text(data = raw, ggplot2::aes(y = Inf, label = n),
-                       vjust = 1.4, size = 2.6, colour = "grey40") +
-    ggplot2::facet_wrap(
-      ~ question,
-      labeller = ggplot2::labeller(
-        question = function(z) scales::label_wrap(wrap_facet)(lab_map[z]))) +
-    ggplot2::scale_y_continuous(
-      labels = scales::percent,
-      expand = ggplot2::expansion(mult = c(.05, .20))) +  # room for 2 label rows
-    ggplot2::scale_x_discrete(labels = scales::label_wrap(wrap_axis)) +
-    ggplot2::labs(x = NULL, y = "P(yes)",
-                  caption = paste("grey = observed;", cap_model,
-                                  "\nstages sharing a letter do not differ",
-                                  "(within item); no letters = none differ")) +
-    ggplot2::theme_minimal() +
-    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+  # =================================================================
+  # PLOT
+  # =================================================================
+  if (is_cont) {
 
-  # letters on a fixed line below the counts, so heights are consistent
-  if (!is.null(cld_df))
-    p <- p + ggplot2::geom_text(
-      data = raw, ggplot2::aes(y = Inf, label = .group),
-      vjust = 2.8, size = 2.4, colour = "grey20", fontface = "bold")
+    # bar width from the tightest gap between observed values, so bars
+    # neither overlap nor leave the axis looking empty
+    ux  <- sort(unique(data[[x]]))
+    bw  <- if (length(ux) > 1) 0.7 * min(diff(ux)) else 0.7
 
-  list(x = x, n_obs = nrow(data), n_id = dplyr::n_distinct(data[[id]]),
-       re.form = re.form, data = data, fit = fit,
-       emm = emm, raw = raw, cld = cld_df, plot = p,
-       chisq_test = chisq_test, omni = omni,
-       q_type = q_type, re_structure = re_structure,
-       order = ord, labels = lab_map, cells = tab)
+    p <- ggplot2::ggplot(emm, ggplot2::aes(.data[[x]], prob)) +
+      ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
+                        fill = "grey85", width = bw) +
+      # a ribbon + line rather than pointranges: the model is a smooth
+      # function of x, and drawing it as isolated points would hide that
+      ggplot2::geom_ribbon(
+        ggplot2::aes(ymin = asymp.LCL, ymax = asymp.UCL),
+        fill = "firebrick", alpha = .18) +
+      ggplot2::geom_line(colour = "firebrick", linewidth = .6) +
+      ggplot2::geom_text(data = raw, ggplot2::aes(y = Inf, label = n),
+                         vjust = 1.4, size = 2.6, colour = "grey40") +
+      ggplot2::facet_wrap(
+        ~ question,
+        labeller = ggplot2::labeller(
+          question = function(z) scales::label_wrap(wrap_facet)(lab_map[z]))) +
+      ggplot2::scale_y_continuous(
+        labels = scales::percent,
+        expand = ggplot2::expansion(mult = c(.05, .20))) +
+      # continuous, NOT scale_x_discrete
+      ggplot2::scale_x_continuous(breaks = scales::breaks_pretty(5)) +
+      ggplot2::labs(x = x, y = "P(yes)",
+                    caption = paste("grey = observed;", cap_model,
+                                    "\nOR = odds ratio per unit of", x,
+                                    "(FDR across items);",
+                                    "* p<.05, ** p<.01, *** p<.001")) +
+      ggplot2::theme_minimal()
+
+    # per-question slope on a fixed line below the counts
+    if (!is.null(trends_df))
+      p <- p + ggplot2::geom_text(
+        data = trends_df, ggplot2::aes(x = mean(ux), y = Inf, label = label),
+        vjust = 2.8, size = 2.4, colour = "grey20", fontface = "bold",
+        inherit.aes = FALSE)
+
+  } else {
+
+    p <- ggplot2::ggplot(emm, ggplot2::aes(.data[[x]], prob)) +
+      ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
+                        fill = "grey85", width = .7) +
+      ggplot2::geom_pointrange(
+        ggplot2::aes(ymin = asymp.LCL, ymax = asymp.UCL),
+        colour = "firebrick", size = .3) +
+      ggplot2::geom_text(data = raw, ggplot2::aes(y = Inf, label = n),
+                         vjust = 1.4, size = 2.6, colour = "grey40") +
+      ggplot2::facet_wrap(
+        ~ question,
+        labeller = ggplot2::labeller(
+          question = function(z) scales::label_wrap(wrap_facet)(lab_map[z]))) +
+      ggplot2::scale_y_continuous(
+        labels = scales::percent,
+        expand = ggplot2::expansion(mult = c(.05, .20))) +  # room for 2 label rows
+      ggplot2::scale_x_discrete(labels = scales::label_wrap(wrap_axis)) +
+      ggplot2::labs(x = NULL, y = "P(yes)",
+                    caption = paste("grey = observed;", cap_model,
+                                    "\ngroups sharing a letter do not differ",
+                                    "(within item); no letters = none differ")) +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+    # letters on a fixed line below the counts, so heights are consistent
+    if (!is.null(cld_df))
+      p <- p + ggplot2::geom_text(
+        data = raw, ggplot2::aes(y = Inf, label = .group),
+        vjust = 2.8, size = 2.4, colour = "grey20", fontface = "bold")
+  }
+
+  structure(
+    list(x = x, x_type = x_type, x_coerced = x_was_coerced,
+         n_distinct_x = n_distinct_x,
+         n_obs = nrow(data), n_id = dplyr::n_distinct(data[[id]]),
+         re.form = re.form, pred_re_form = pred_re_form,
+         pred_at_observed = pred_at_observed,
+         data = data, fit = fit,
+         emm = emm, raw = raw, cld = cld_df, trends = trends_df, plot = p,
+         chisq_test = chisq_test, omni = omni,
+         q_type = q_type, re_structure = re_structure,
+         order = ord, labels = lab_map, cells = tab),
+    class = "select_all")
 }
 
 
@@ -1176,7 +1462,19 @@ demo_specs <- list(
     var   = "IO",
     label = "index of opportunity",
     drop  = character(0),
-    type  = "count")
+    type  = "count"),
+
+  ds_freq = list(
+    var   = "ds_freq",
+    label = "data science frequency",
+    drop  = character(0),
+    type  = "count"),
+    
+  policies = list(
+    var   = "policies",
+    label = "institutional policies",
+    drop  = c("There are not any policies or guidelines at my institution", "Other"),
+    type  = "count")    
 )
 
 
@@ -1242,7 +1540,7 @@ sa_specs <- list(
   challenges  = list(q = "challenges",     clean = clean_challenges,
                      q_type = NULL, label = "challenges"),
   reasons     = list(q = "ai_use_reasons", clean = clean_reasons,
-                     q_type = "q_type", label = "reasons for use")
+                     q_type = "q_type", label = "reasons for use", re_structure = "correlated")
 )
 
 
@@ -1264,28 +1562,118 @@ ord_specs <- list(
 # =================================================================
 # 5b. CELL DIAGNOSTICS (run before fitting, recorded either way)
 # =================================================================
-check_cells <- function(long, x, min_n = 5) {
+check_cells <- function(long, x, min_n = 5,
 
+                        x_type = c("continuous", "categorical"),
+                        # continuous only: a question needs at least this
+                        # many distinct x values for a slope to exist, and
+                        # this many respondents overall to be worth fitting
+                        min_distinct_x = 3,
+                        min_n_item     = 20
+                        # ----------------------------------------------
+                        ) {
+
+  x_type <- match.arg(x_type)
+  is_cont <- identical(x_type, "continuous")
+
+  # .drop = FALSE materialises unused FACTOR combinations so that genuinely
+  # empty cells appear as n == 0 rows. A numeric has no levels, so it does
+  # nothing there - which is why `empty` was already always 0 rows for a
+  # continuous x.
   tab <- long %>%
-    dplyr::group_by(question, .data[[x]], .drop = FALSE) %>%
+    dplyr::group_by(question, .data[[x]], .drop = !is_cont) %>%
     dplyr::summarise(n   = dplyr::n(),
                      yes = sum(response_numeric),
                      p   = mean(response_numeric),
                      .groups = "drop")
 
-  list(
-    empty     = dplyr::filter(tab, n == 0),
-    # all-yes or all-no cells cause complete separation, which is what
-    # makes glmer fail. See Gelman et al. 2008, 10.1214/08-AOAS191
-    separated = dplyr::filter(tab, n > 0, yes == 0 | yes == n),
-    thin      = dplyr::filter(tab, n > 0, n < min_n),
-    item_rates = long %>%
+  item_rates <- long %>%
+    dplyr::group_by(question) %>%
+    dplyr::summarise(n = dplyr::n(), p = mean(response_numeric),
+                     .groups = "drop") %>%
+    dplyr::arrange(p)
+
+  if (!is_cont) {
+
+    # ---- CATEGORICAL: each x level has its own parameter -----------
+    # An empty cell means a non-estimable cell mean, and an all-yes or
+    # all-no cell means complete separation, so cell-level checks are the
+    # right granularity.
+    out <- list(
+      empty     = dplyr::filter(tab, n == 0),
+      # all-yes or all-no cells cause complete separation, which is what
+      # makes glmer fail. See Gelman et al. 2008, 10.1214/08-AOAS191
+      separated = dplyr::filter(tab, n > 0, yes == 0 | yes == n),
+      thin      = dplyr::filter(tab, n > 0, n < min_n))
+
+  } else {
+
+    # ---- CONTINUOUS: one slope pools across all x values -----------
+    # A gap at any single x value is harmless: the model interpolates
+    # through it. Nothing is estimated per cell, so cell-level emptiness,
+    # thinness and all-yes/all-no are all irrelevant - with ~400 people
+    # spread over question x x, most cells are thin and many are constant
+    # by chance, which made the old checks fire on nearly every question.
+    #
+    # What matters instead, per question:
+    #   1. is there any spread in x at all?            (no spread, no slope)
+    #   2. is the response constant?                   (complete separation)
+    #   3. do the yes and no x-ranges overlap?         (separation along x)
+    item <- long %>%
       dplyr::group_by(question) %>%
-      dplyr::summarise(n = dplyr::n(), p = mean(response_numeric),
-                       .groups = "drop") %>%
-      dplyr::arrange(p),
-    full = tab
-  )
+      dplyr::summarise(
+        n            = dplyr::n(),
+        yes          = sum(response_numeric),
+        p            = mean(response_numeric),
+        n_distinct_x = dplyr::n_distinct(.data[[x]]),
+        min_x        = min(.data[[x]]),
+        max_x        = max(.data[[x]]),
+        # x range covered by each response, used for the overlap test.
+        # NA rather than Inf when one response never occurs, so the
+        # comparisons below return NA and are caught by the constant test.
+        x_yes_min = if (any(response_numeric == 1))
+                      min(.data[[x]][response_numeric == 1]) else NA_real_,
+        x_yes_max = if (any(response_numeric == 1))
+                      max(.data[[x]][response_numeric == 1]) else NA_real_,
+        x_no_min  = if (any(response_numeric == 0))
+                      min(.data[[x]][response_numeric == 0]) else NA_real_,
+        x_no_max  = if (any(response_numeric == 0))
+                      max(.data[[x]][response_numeric == 0]) else NA_real_,
+        .groups = "drop") %>%
+      dplyr::mutate(
+        # the response never varies -> the intercept is separated
+        const_y  = yes == 0 | yes == n,
+        # every "yes" sits above every "no" (or below): the slope is
+        # separated and diverges to +-Inf. This is the continuous
+        # analogue of an all-yes/all-no cell, and the thing worth
+        # catching. Gelman et al. 2008, 10.1214/08-AOAS191 applies here
+        # too - a weakly informative prior is the fix if you need the fit.
+        sep_x    = !const_y &
+                   ((x_yes_min > x_no_max) | (x_no_min > x_yes_max)),
+        # no spread in x -> the question-specific slope is not estimable
+        flat_x   = n_distinct_x < 2,
+        thin_x   = n_distinct_x < min_distinct_x,
+        thin_n   = n < min_n_item)
+
+    out <- list(
+      # kept for interface compatibility, deliberately always 0 rows:
+      # an unobserved (question, x) combination is not a problem here
+      empty     = tab[0, ],
+      separated = dplyr::filter(item, const_y | sep_x | flat_x),
+      thin      = dplyr::filter(item, !(const_y | sep_x | flat_x),
+                                thin_x | thin_n),
+      # full question-level diagnostics, continuous only
+      item      = item)
+  }
+
+  c(out,
+    list(item_rates = item_rates,
+         full       = tab,
+         x          = x,
+         x_type     = x_type,
+         # so a caller can tell at a glance whether `separated` / `thin`
+         # are cell-level (categorical) or question-level (continuous)
+         grain      = if (is_cont) "question" else "cell"))
 }
 
 
@@ -1293,21 +1681,80 @@ check_cells <- function(long, x, min_n = 5) {
 # An item endorsed by almost nobody (or almost everybody) within a
 # demographic produces separated cells and no estimable interaction.
 # Report those items as plain percentages instead of modelling them.
-drop_unmodellable <- function(long, lo = 0.03, hi = 0.97, quiet = FALSE) {
-
+# ---- drop items that cannot be modelled ---------------------------
+# Two independent reasons an item has to go:
+#
+#   RATE   endorsed by almost nobody (or almost everybody) overall, so
+#          there is no estimable interaction. Report it as a plain
+#          percentage instead of modelling it.
+#
+#   SEP    flagged by check_cells() as separated. For a continuous x this
+#          means every "yes" sits above every "no", so the slope diverges
+#          to +-Inf. glmer WARNS rather than errors on this, so try() will
+#          not catch it and a garbage fit gets recorded as a success -
+#          which is why it has to be caught here.
+#
+# `chk` is the list returned by check_cells(). Passing NULL reproduces the
+# old behaviour exactly (rate filter only).
+#
+# drop_separated:
+#   "auto"  drop only when chk is question-level (continuous x). For a
+#           categorical x a single all-yes/all-no CELL separates one
+#           coefficient but leaves the rest of the model usable, so the
+#           whole item is kept and the marginal rate filter decides.
+#   TRUE    always drop anything in chk$separated
+#   FALSE   never
+drop_unmodellable <- function(long, chk = NULL,
+                              lo = 0.03, hi = 0.97,
+                              drop_separated = c("auto", "yes", "no"),
+                              quiet = FALSE) {
+ 
+  drop_separated <- match.arg(drop_separated)
+ 
+  # ---- reason 1: marginal endorsement rate ----------------------
   rates <- long %>%
     dplyr::group_by(question) %>%
     dplyr::summarise(p = mean(response_numeric), .groups = "drop")
-
-  keep <- rates %>% dplyr::filter(p >= lo, p <= hi) %>% dplyr::pull(question)
-  gone <- setdiff(as.character(rates$question), as.character(keep))
-
-  if (length(gone) && !quiet)
-    message("  dropping ", length(gone), " item(s) outside [", lo, ", ", hi,
-            "]: ", paste(gone, collapse = ", "))
-
-  out <- long %>% dplyr::filter(question %in% keep) %>% droplevels()
-  attr(out, "dropped_items") <- gone
+ 
+  keep_rate <- rates %>%
+    dplyr::filter(p >= lo, p <= hi) %>%
+    dplyr::pull(question) %>%
+    as.character()
+ 
+  gone_rate <- setdiff(as.character(rates$question), keep_rate)
+ 
+  # ---- reason 2: separation flagged by check_cells() ------------
+  # grain is absent on a pre-update check_cells() result, in which case
+  # treat it as cell-level so nothing new gets dropped
+  grain <- if (is.null(chk) || is.null(chk$grain)) "cell" else chk$grain
+ 
+  use_sep <- !is.null(chk) && !is.null(chk$separated) &&
+    (drop_separated == "yes" ||
+       (drop_separated == "auto" && identical(grain, "question")))
+ 
+  gone_sep <- if (use_sep)
+    setdiff(unique(as.character(chk$separated$question)), gone_rate)
+  else character(0)
+ 
+  gone <- union(gone_rate, gone_sep)
+ 
+  if (!quiet) {
+    if (length(gone_rate))
+      message("  dropping ", length(gone_rate), " item(s) outside [", lo,
+              ", ", hi, "]: ", paste(gone_rate, collapse = ", "))
+    if (length(gone_sep))
+      message("  dropping ", length(gone_sep), " separated item(s): ",
+              paste(gone_sep, collapse = ", "))
+  }
+ 
+  out <- long %>%
+    dplyr::filter(!as.character(question) %in% gone) %>%
+    droplevels()
+ 
+  # set attributes last: filter() and droplevels() do not preserve them
+  attr(out, "dropped_items")     <- gone        # union, as before
+  attr(out, "dropped_rate")      <- gone_rate
+  attr(out, "dropped_separated") <- gone_sep
   out
 }
 
@@ -1319,10 +1766,12 @@ drop_unmodellable <- function(long, lo = 0.03, hi = 0.97, quiet = FALSE) {
 # ---- fit both re.form variants, cache, save figures ---------------
 # re.form = NULL  -> population average, comparable to the observed bars
 # re.form = NA    -> typical respondent (random effects = 0)
+
 run_select_all <- function(long, x, tag,
                            rerun     = rerun_mods,
-                           re_forms  = list(pop = NULL, subj = NA),
-                           width = 15, height = 14, scale = 0.8, ...) {
+                           # re_forms  = list(pop = NULL, subj = NA),
+                           re_forms  = list(subj = NA),
+                           width = 18, height = 14, scale = 0.8, ...) {
 
   out <- list()
 
@@ -1344,66 +1793,129 @@ run_select_all <- function(long, x, tag,
 
 
 # ---- one cell of the grid ------------------------------------------
+# run_sa_cell(survey, spec, demo_specs[[demo]],
+#               re_structure = if (is.null(spec$q_type)) "nested" else "nested")
+
+# sa   <- sa_grid$sa[[i]]
+#   demo <- sa_grid$demo[[i]]
+#   spec <- sa_specs[[sa]]
+#   spec$label_tag <- sa
+
+# demo = demo_specs[['career_stage']]
+# ---- one cell of the grid ------------------------------------------
 run_sa_cell <- function(survey, sa, demo,
                         min_n_level = 20, verbose = FALSE, ...) {
-
+ 
   tag <- paste0(sa$label_tag, "_by_", demo$var)
   message("\n=== ", sa$q, " by ", demo$var, " ===")
-
+ 
   dat <- prep_demo(survey, demo)
-
+ 
   long <- expand_select_all(dat, q = sa$q, x = demo$var) %>%
     sa$clean()
-
-  # drop demographic levels too small to support an item-level model
+ 
+  # one decision, read by every branch below. demo$type is the spec's own
+  # label and is honoured when it says "count"/"continuous"; otherwise the
+  # column itself decides.
+  is_cont <- if (!is.null(demo$type) &&
+                 demo$type %in% c("count", "continuous"))
+    TRUE else is.numeric(long[[demo$var]])
+ 
+  # respondents per level / per x value - recorded either way
   lvl_n <- long %>%
     dplyr::distinct(ResponseId, .data[[demo$var]]) %>%
     dplyr::count(.data[[demo$var]], name = "n_id")
-  small <- lvl_n %>% dplyr::filter(n_id < min_n_level)
-
-  if (nrow(small)) {
-    message("  dropping level(s) with < ", min_n_level, " respondents: ",
-            paste(sprintf("%s (n = %d)", small[[demo$var]], small$n_id),
-                  collapse = ", "))
-    long <- long %>%
-      dplyr::filter(!.data[[demo$var]] %in% small[[demo$var]]) %>%
-      droplevels()
+ 
+  if (!is_cont) {
+ 
+    # CATEGORICAL: each level carries its own parameter, so a level with
+    # too few respondents gives an unstable estimate and is dropped.
+    small <- dplyr::filter(lvl_n, n_id < min_n_level)
+ 
+    if (nrow(small)) {
+      message("  dropping level(s) with < ", min_n_level, " respondents: ",
+              paste(sprintf("%s (n = %d)", small[[demo$var]], small$n_id),
+                    collapse = ", "))
+      long <- long %>%
+        dplyr::filter(!.data[[demo$var]] %in% small[[demo$var]]) %>%
+        droplevels()
+    }
+ 
+  } else {
+ 
+    # CONTINUOUS: nothing is estimated at an individual x value - one
+    # slope pools across all of them - so dropping sparse values would
+    # truncate the predictor's range rather than remove a weak group.
+    # Noted, not acted on.
+    thin_x <- dplyr::filter(lvl_n, n_id < min_n_level)
+    if (nrow(thin_x))
+      message("  ", nrow(thin_x), " value(s) of ", demo$var, " have < ",
+              min_n_level, " respondents (",
+              paste(sprintf("%s: %d", thin_x[[demo$var]], thin_x$n_id),
+                    collapse = ", "),
+              "); kept, since the slope pools across values")
   }
-
-  chk  <- check_cells(long, x = demo$var)
-  long <- drop_unmodellable(long)
-
-  if (nlevels(long[[demo$var]]) < 2 || dplyr::n_distinct(long$question) < 2)
-    return(list(tag = tag, cells = chk, lvl_n = lvl_n,
-                error = "fewer than 2 levels or 2 items remain"))
-
+ 
+  # chk describes the data BEFORE dropping, so it records WHY items went.
+  # drop_unmodellable() now reads it, so separated items are removed
+  # instead of being handed to glmer.
+  chk  <- check_cells(long, x = demo$var,
+                      x_type = if (is_cont) "continuous" else "categorical")
+  long <- drop_unmodellable(long, chk = chk)
+ 
+  # nlevels() is 0 for a numeric column, here counts number regardless
+  n_x <- if (is_cont) dplyr::n_distinct(long[[demo$var]])
+         else nlevels(long[[demo$var]])
+ 
+  base <- list(tag = tag, cells = chk, lvl_n = lvl_n,
+               is_cont = is_cont, n_x = n_x,
+               dropped_items     = attr(long, "dropped_items"),
+               dropped_rate      = attr(long, "dropped_rate"),
+               dropped_separated = attr(long, "dropped_separated"))
+ 
+  if (n_x < 2 || dplyr::n_distinct(long$question) < 2)
+    return(c(base, list(
+      error = sprintf("fewer than 2 %s or 2 items remain",
+                      if (is_cont) "distinct x values" else "levels"))))
+                   
   fit <- try(
     run_select_all(long, x = demo$var, tag = tag,
-                   q_type = sa$q_type, verbose = verbose, ...),
+                   q_type = sa$q_type, verbose = verbose,
+                   re_structure = sa$re_structure, ...),
     silent = TRUE)
 
+    # print(lme4::VarCorr(fit_cor))
+ 
   if (inherits(fit, "try-error")) {
-    message("  FAILED: ", conditionMessage(attr(fit, "condition")))
-    return(list(tag = tag, cells = chk, lvl_n = lvl_n, long = long,
-                error = conditionMessage(attr(fit, "condition"))))
+    msg <- conditionMessage(attr(fit, "condition"))
+ 
+    # A package-conflict, missing-function or missing-object error is a
+    # script configuration problem, not a property of this cell's data.
+    # Recording it as a cell error empties every downstream table, so stop.
+    if (grepl("\\[conflicted\\]|could not find function|object '.*' not found",
+              msg))
+      stop("configuration error in cell ", tag, ":\n", msg, call. = FALSE)
+ 
+    message("  FAILED: ", msg)
+    return(c(base, list(long = long, error = msg)))
   }
-
-  list(tag = tag, cells = chk, lvl_n = lvl_n, long = long,
-       dropped_items = attr(long, "dropped_items"),
-       res = fit, error = NA_character_)
+ 
+  c(base, list(long = long, res = fit, error = NA_character_))
 }
 
 
 # ---- run the whole grid --------------------------------------------
 sa_grid <- tidyr::expand_grid(sa = names(sa_specs), demo = names(demo_specs))
 
-sa_results <- purrr::pmap(sa_grid, function(sa, demo) {
+sa_results <- lapply(seq_len(nrow(sa_grid)), function(i) {
+  sa   <- sa_grid$sa[[i]]
+  demo <- sa_grid$demo[[i]]
   spec <- sa_specs[[sa]]
   spec$label_tag <- sa
-  # re_structure only matters when q_type is supplied; "nested" is the
+  # re_structure only matters when q_type is supplied; correlated is expected due to 
+  # expecting inverse
   # robust default (see the single-neutral-item problem in clean_reasons)
-  run_sa_cell(survey, spec, demo_specs[[demo]],
-              re_structure = if (is.null(spec$q_type)) "nested" else "nested")
+  run_sa_cell(survey, spec, demo_specs[[demo]])
 })
 names(sa_results) <- paste(sa_grid$sa, sa_grid$demo, sep = "__")
 
@@ -1423,22 +1935,34 @@ sa_summary <- purrr::imap_dfr(sa_results, function(z, nm) {
 
   if (!is.na(z$error)) return(base)
 
-  f <- z$res$pop
+  # whichever re.form variants were fitted, prefer pop when present
+  f <- if (!is.null(z$res$pop)) z$res$pop else z$res[[1]]
+  if (is.null(f) || is.null(f$fit))
+    return(dplyr::mutate(base, error = "no fitted model in $res"))
   o <- f$omni
+
+  # omnibus: does total endorsement differ across the demographic?
+  # the quasibinomial version reports an F column, the binomial a Chisq
+  # one, so the p column is found by prefix rather than by name
+  p_total <- if (o$kind == "binomial_glm") {
+    tst <- if (is.null(o$test_quasi)) o$test else o$test_quasi
+    tst[[grep("^Pr", names(tst))[1]]][2]
+  } else {
+    o$test_x[["Pr(>Chisq)"]][2]
+  }
+
+  # only for q_type questions: does the valence balance shift?
+  p_valence <- if (o$kind == "clustered_glm")
+    o$test[["Pr(>Chisq)"]][2] else NA_real_
 
   dplyr::bind_rows(base) %>%
     dplyr::mutate(
       n_obs     = f$n_obs,
       n_id      = f$n_id,
-      singular  = lme4::isSingular(f$fit),
-      # omnibus: does total endorsement differ across the demographic?
-      p_total   = if (o$kind == "binomial_glm") {
-                    t <- if (is.null(o$test_quasi)) o$test else o$test_quasi
-                    t[[grep("^Pr", names(t))[1]]][2]
-                  } else o$test_x[["Pr(>Chisq)"]][2],
-      # only for q_type questions: does the valence balance shift?
-      p_valence = if (o$kind == "clustered_glm")
-                    o$test[["Pr(>Chisq)"]][2] else NA_real_,
+      singular  = if (inherits(f$fit, "merMod"))
+                    lme4::isSingular(f$fit) else NA,
+      p_total   = .env$p_total,
+      p_valence = .env$p_valence,
       # item-level: does the demographic effect differ by item?
       p_item_int = if (!is.null(f$chisq_test))
                      f$chisq_test[["Pr(Chi)"]][2] else NA_real_)
@@ -1460,7 +1984,7 @@ dplyr::filter(sa_summary, !is.na(error))
 # 6. ORDINAL GRID: every ordinal outcome x every demographic
 # =================================================================
 #survey
-#run_ord_cell(survey, ord_specs[[ord]], demo_specs[[demo]]))
+#run_ord_cell(survey, ord_grid[[ord]], demo_specs[[demo]]))
 #gen_attitude career_stage 
 
 run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
@@ -1477,10 +2001,8 @@ run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
   cov <- if (demo$var == "career_stage") NULL else "career_stage"
 
   fit <- if (demo$type == "count") {
-    # IO is an ordered count: a single slope on its own scale. The
-    # min_distinct_x guard is lowered deliberately - IO takes 5 values,
-    # below the default 6, so the equal-spacing assumption is doing real
-    # work and should be checked against the factor version below.
+    # IO/ds_freq/career_stage is an ordered count: a single slope on its own scale. The
+    # min_distinct_x guard is lowered deliberately 
     try(fit_ordinal_by_continuous(dat, x = demo$var, y = ord$y,
                                   covariate = cov, min_distinct_x = 3,
                                   verbose = verbose), silent = TRUE)
@@ -1501,10 +2023,7 @@ run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
   list(tag = tag, res = fit, error = NA_character_)
 }
 
-
 ord_grid <- tidyr::expand_grid(ord = names(ord_specs), demo = names(demo_specs))
-
-
 
 ord_results <- purrr::pmap(ord_grid, function(ord, demo)
   run_ord_cell(survey, ord_specs[[ord]], demo_specs[[demo]]))
@@ -1543,6 +2062,7 @@ readr::write_csv(ord_summary, file.path(fig_path, "ordinal_summary.csv"))
 dplyr::filter(ord_summary, !is.na(error) | conv != 0)
 }
 
+# NOT done below HERE
 # ---- IO as a factor, for comparison ---------------------------------
 # IO takes 5 values, so the slope version assumes equal spacing between
 # adjacent counts. Fitting it as a factor says whether that matters.
@@ -1595,7 +2115,7 @@ purrr::imap_dfr(career_factor, function(z, nm) {
 # sanity check: the factor and slope versions should have the same number of rows
 # nrow (career_factor$ai_use_freq$data) == nrow (ord_results$ai_use_freq__career_stage$res$data)
 
-
+# SCE need to add in the ds_freq as a factor for comparison as well.
 
 
 
