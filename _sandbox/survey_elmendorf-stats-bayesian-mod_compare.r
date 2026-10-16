@@ -934,6 +934,7 @@ run_likert_cell <- function(survey, spec, rerun = rerun_mods,
             paste(cells$thin_y, collapse = ", "),
             " - a likely cause of convergence code -3")
 
+  # source covariate_check from survey_elmendorf-stats.r
   cov_test <- covariate_check(dat, spec$x, spec$y, spec$covariate)
 
   res <- try(
