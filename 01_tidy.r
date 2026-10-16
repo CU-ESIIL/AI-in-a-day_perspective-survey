@@ -174,10 +174,29 @@ dplyr::glimpse(svy_v05)
 ## -------------------------------------------- ##
 
 # Some free text answers basically fit a category option, fix those here
-svy_v06 <- svy_v05
+svy_v06 <- svy_v05 %>% 
+  dplyr::mutate(
+    Gen_Attitude = dplyr::case_when(
+      ResponseId %in% c("R_72DqErU1RKlomk4", "R_6JIyM9ckunDqbZL") ~ "A mix of caution and enthusiasm",
+      ResponseId %in% c("R_1D0WZnaWFyY0ShD", "R_549OELlldpZxBn3", "R_6NUrsLj5l2XtkQw", "R_5wageMTUtwE1X5Y") ~ "Cautious",
+      ResponseId %in% c("R_77O6CutSweqRQNV") ~ "Indifferent",
+      ResponseId %in% c("R_52S1axziGbSHgBI", "R_51bPIWmQCeG3YIS") ~ "Opposed to GenAI",
+      TRUE ~ Gen_Attitude),
+    Policies = dplyr::case_when(
+      ResponseId %in% c("R_7UlC1YeZPZVWL61", "R_8HictsFKz8JaTBS", "R_3U3FkFAqDBqAO0y") ~ "Somewhat permissive/supportive",
+      ResponseId %in% c("R_58NClRQT7Fb4KzQ", "R_5egiapYCSPa7pPj") ~ "There are not any policies or guidelines at my institution",
+      ResponseId %in% c("R_6ncJ2fW6AzyM3fE", "R_7OUBKpp9fT5dyKH") ~ "Very permissive/supportive",
+      TRUE ~ Policies),
+    Work_Sector = dplyr::case_when(
+      ResponseId %in% c("R_3oC6hpYRNt9eJnl") ~ "Government (Federal, State, Local, Tribal)",
+      ResponseId %in% c("R_51bPIWmQCeG3YIS") ~ "Industry / Private Sector",
+      ResponseId %in% c("R_1D0WZnaWFyY0ShD") ~ "Non-Profit / NGO",
+      TRUE ~ Work_Sector))
 
-# This is described more fully in the following issue:
-## https://github.com/CU-ESIIL/AI-in-a-day_perspective-survey/issues/5
+# Check gained/lost of affected questions
+supportR::count_diff(svy_v06$Gen_Attitude, svy_v05$Gen_Attitude)
+supportR::count_diff(svy_v06$Policies, svy_v05$Policies)
+supportR::count_diff(svy_v06$Work_Sector, svy_v05$Work_Sector)
 
 # Check structure
 dplyr::glimpse(svy_v06)
