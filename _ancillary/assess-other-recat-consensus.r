@@ -81,8 +81,12 @@ dplyr::glimpse(align_v01)
 
 # Do some post-processing
 align_v02 <- align_v01 %>% 
+  dplyr::mutate(id = 1:nrow(.)) %>% 
+  dplyr::group_by(id) %>% 
   dplyr::mutate(consensus = sum(c(Emery == Quarderer, 
-    Quarderer == Lyon, Emery == Lyon), na.rm = TRUE))
+    Quarderer == Lyon, Emery == Lyon), na.rm = TRUE)) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::select(-id)
 
 # Check structure
 dplyr::glimpse(align_v02)
@@ -91,8 +95,9 @@ dplyr::glimpse(align_v02)
 # Export ----
 ## -------------------------------------------- ##
 
-# Make a final object
-align_v99 <- align_v02
+# Make a final object of only max consensus
+align_v99 <- align_v02 %>% 
+  dplyr::filter(consensus == 3)
 
 # One last structure check
 dplyr::glimpse(align_v99)
