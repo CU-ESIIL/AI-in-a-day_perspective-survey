@@ -824,11 +824,18 @@ fit_select_all <- function(data, x, id = "ResponseId",
                            # below this many distinct values a continuous x is
                            # warned about but still fitted as continuous
                            min_distinct_x = 4,
-                           # at or below this, model predictions are taken at
-                           # the OBSERVED x values (so re.form is honoured);
-                           # above it, a smooth grid is used with re.form = NA
+                           # at or below this many distinct values, re.form is
+                           # honoured and points are drawn at the OBSERVED x
+                           # values; above it, only the smooth curve is drawn
+                           # and re.form = NA is used (see PREDICTIONS)
                            grid_threshold = 15,
+                           # points on the smooth prediction curve. n_grid is
+                           # used when random effects are set to zero (cheap);
+                           # n_grid_avg when predictions are averaged over every
+                           # respondent at each grid point (n_rows x n_grid_avg
+                           # predictions, so keep it modest)
                            n_grid = 100,
+                           n_grid_avg = 30,
                            # ------------------------------------------------
 
                            wrap_facet = 25, wrap_axis = 20,
@@ -880,9 +887,19 @@ fit_select_all <- function(data, x, id = "ResponseId",
 
   x_was_coerced <- FALSE
 
+  # number -> original label, so a coerced ordered factor keeps its level
+  # text on the x axis instead of showing 1..K. NULL when x was numeric to
+  # begin with (the axis then uses ordinary pretty breaks).
+  x_labels <- NULL
+
   if (x_type == "continuous") {
     if (!is.numeric(data[[x]])) {
-      data[[x]] <- .as_numeric_x(data[[x]], x)
+      x_orig    <- data[[x]]
+      data[[x]] <- .as_numeric_x(x_orig, x)
+      x_map     <- unique(data.frame(num = data[[x]],
+                                     lab = as.character(x_orig)))
+      x_map     <- x_map[order(x_map$num), ]
+      x_labels  <- stats::setNames(x_map$lab, x_map$num)
       x_was_coerced <- TRUE
     }
     n_distinct_x <- dplyr::n_distinct(data[[x]])
@@ -1124,32 +1141,74 @@ fit_select_all <- function(data, x, id = "ResponseId",
   # Caveat: with re.form = NULL the intervals reflect fixed-effect
   # uncertainty only - marginaleffects warns about this.
   #
-  # For a continuous x with few distinct values, predicting AT those values
-  # keeps re.form meaningful (it averages over the real respondents). With
-  # many distinct values a smooth grid is needed instead, and averaging
-  # over respondents at every grid point is prohibitive, so re.form = NA
-  # is used and the caption says so.
+  # CONTINUOUS x: why the curve is not a straight line, and how it is drawn
+  # -------------------------------------------------------------------
+  # The model is linear in x on the LOGIT scale. On the probability scale
+  # plogis(a + b * x) is an S-curve, so a straight line is not expected:
+  # it is steepest near 50% and flattens towards 0% and 100%.
+  #
+  # The old version predicted only at the K observed x values and let
+  # geom_line() join them, which drew that S-curve as a polyline with a
+  # corner at every observed value. With re.form = NULL it also averaged
+  # each point over a DIFFERENT set of people (whoever happened to be in
+  # that x group), so the points were not on one smooth curve at all.
+  #
+  # Now the curve is evaluated on a fine grid that includes the observed
+  # values (so the points sit exactly on it):
+  #   re.form = NA    fixed effects only: the typical-respondent curve,
+  #                   exactly linear on the logit scale.
+  #   re.form = NULL  counterfactual (standardised) average: EVERY
+  #                   respondent is set to each grid value in turn and the
+  #                   predictions are averaged, so each point averages over
+  #                   the same people. The population-averaged curve is
+  #                   flatter than the typical-respondent one and is not
+  #                   exactly linear on the logit scale either - that is a
+  #                   property of averaging a nonlinear function, not noise.
+  # With more than grid_threshold distinct values only the curve is drawn,
+  # with re.form = NA, as before.
+  .re_zero <- function(r) !is.null(r) && !inherits(r, "formula") &&
+    length(r) == 1L && is.na(r)
+
   pred_at_observed <- !is_cont || n_distinct_x <= grid_threshold
+  emm_line <- NULL   # continuous only: the smooth curve
 
-  if (pred_at_observed) {
-    emm <- as.data.frame(
+  .tidy_pred <- function(p)
+    as.data.frame(p) %>%
+      dplyr::rename(prob = estimate, asymp.LCL = conf.low, asymp.UCL = conf.high)
+
+  if (!is_cont) {
+    emm <- .tidy_pred(
       marginaleffects::avg_predictions(
-        fit, by = c("question", x), re.form = re.form)) %>%
-      dplyr::rename(prob = estimate, asymp.LCL = conf.low, asymp.UCL = conf.high)
+        fit, by = c("question", x), re.form = re.form))
     pred_re_form <- re.form
-  } else {
-    x_grid <- seq(min(data[[x]]), max(data[[x]]), length.out = n_grid)
-    # datagrid() does not accept dynamic dots, so the x column is named
-    # through setNames rather than `!!x :=`
-    nd <- do.call(
-      marginaleffects::datagrid,
-      c(list(model = fit, question = unique(as.character(data$question))),
-        stats::setNames(list(x_grid), x)))
 
-    emm <- as.data.frame(
-      marginaleffects::predictions(fit, newdata = nd, re.form = NA)) %>%
-      dplyr::rename(prob = estimate, asymp.LCL = conf.low, asymp.UCL = conf.high)
-    pred_re_form <- NA
+  } else {
+    x_obs        <- sort(unique(data[[x]]))
+    pred_re_form <- if (pred_at_observed) re.form else NA
+    grid_n       <- if (.re_zero(pred_re_form)) n_grid else n_grid_avg
+    x_grid       <- sort(unique(c(x_obs, seq(min(x_obs), max(x_obs),
+                                             length.out = grid_n))))
+
+    if (.re_zero(pred_re_form)) {
+      # datagrid() does not accept dynamic dots, so the x column is named
+      # through setNames rather than `!!x :=`
+      nd <- do.call(
+        marginaleffects::datagrid,
+        c(list(model = fit, question = unique(as.character(data$question))),
+          stats::setNames(list(x_grid), x)))
+      emm_line <- .tidy_pred(
+        marginaleffects::predictions(fit, newdata = nd, re.form = NA))
+    } else {
+      emm_line <- .tidy_pred(
+        marginaleffects::avg_predictions(
+          fit, variables = stats::setNames(list(x_grid), x),
+          by = c("question", x), re.form = pred_re_form))
+    }
+
+    # points at the observed values, taken from the same curve
+    emm <- if (pred_at_observed)
+      emm_line[round(emm_line[[x]], 10) %in% round(x_obs, 10), , drop = FALSE]
+    else emm_line
   }
 
   # =================================================================
@@ -1258,9 +1317,11 @@ fit_select_all <- function(data, x, id = "ResponseId",
                        by = c("question", x))
   } else if (is_cont) {
     # keep the join keys aligned without touching the numeric x
-    raw$question <- as.character(raw$question)
-    emm$question <- as.character(emm$question)
-    emm[[x]]     <- as.numeric(emm[[x]])
+    raw$question      <- as.character(raw$question)
+    emm$question      <- as.character(emm$question)
+    emm[[x]]          <- as.numeric(emm[[x]])
+    emm_line$question <- as.character(emm_line$question)
+    emm_line[[x]]     <- as.numeric(emm_line[[x]])
   }
 
   # ---- facet order: highest overall P(yes) first -----------------
@@ -1279,6 +1340,8 @@ fit_select_all <- function(data, x, id = "ResponseId",
     lv_q <- as.character(ord$question)
     emm$question <- factor(as.character(emm$question), levels = lv_q)
     raw$question <- factor(as.character(raw$question), levels = lv_q)
+    if (!is.null(emm_line))
+      emm_line$question <- factor(as.character(emm_line$question), levels = lv_q)
     if (!is.null(trends_df))
       trends_df$question <- factor(trends_df$question, levels = lv_q)
   } else if (!is.null(trends_df)) {
@@ -1303,15 +1366,33 @@ fit_select_all <- function(data, x, id = "ResponseId",
     ux  <- sort(unique(data[[x]]))
     bw  <- if (length(ux) > 1) 0.7 * min(diff(ux)) else 0.7
 
-    p <- ggplot2::ggplot(emm, ggplot2::aes(.data[[x]], prob)) +
+    # Axis: a coerced ordered factor keeps its original level text at the
+    # positions it was scored to; a genuinely numeric x gets pretty breaks.
+    x_scale <- if (!is.null(x_labels))
+      ggplot2::scale_x_continuous(
+        breaks       = as.numeric(names(x_labels)),
+        labels       = scales::label_wrap(wrap_axis)(unname(x_labels)),
+        minor_breaks = NULL)
+    else
+      ggplot2::scale_x_continuous(breaks = scales::breaks_pretty(5))
+
+    p <- ggplot2::ggplot(emm_line, ggplot2::aes(.data[[x]], prob)) +
       ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
                         fill = "grey85", width = bw) +
       # a ribbon + line rather than pointranges: the model is a smooth
-      # function of x, and drawing it as isolated points would hide that
+      # function of x, and drawing it as isolated points would hide that.
+      # Drawn from the fine grid, so it is the model's actual curve rather
+      # than straight segments between the observed values.
       ggplot2::geom_ribbon(
         ggplot2::aes(ymin = asymp.LCL, ymax = asymp.UCL),
         fill = "firebrick", alpha = .18) +
-      ggplot2::geom_line(colour = "firebrick", linewidth = .6) +
+      ggplot2::geom_line(colour = "firebrick", linewidth = .6)
+
+    # model estimate at each observed value, to read against its bar
+    if (pred_at_observed)
+      p <- p + ggplot2::geom_point(data = emm, colour = "firebrick", size = 1.4)
+
+    p <- p +
       ggplot2::geom_text(data = raw, ggplot2::aes(y = Inf, label = n),
                          vjust = 1.4, size = 2.6, colour = "grey40") +
       ggplot2::facet_wrap(
@@ -1322,13 +1403,23 @@ fit_select_all <- function(data, x, id = "ResponseId",
         labels = scales::percent,
         expand = ggplot2::expansion(mult = c(.05, .20))) +
       # continuous, NOT scale_x_discrete
-      ggplot2::scale_x_continuous(breaks = scales::breaks_pretty(5)) +
+      x_scale +
       ggplot2::labs(x = x, y = "P(yes)",
                     caption = paste("grey = observed;", cap_model,
-                                    "\nOR = odds ratio per unit of", x,
+                                    "\nOR = odds ratio per",
+                                    # text levels were scored 1..K, so a unit
+                                    # is one step between adjacent levels
+                                    if (!is.null(x_labels) && anyNA(
+                                          suppressWarnings(as.numeric(x_labels))))
+                                      "one-level step in" else "unit of", x,
                                     "(FDR across items);",
                                     "* p<.05, ** p<.01, *** p<.001")) +
       ggplot2::theme_minimal()
+
+    # level text is usually long; angle it like the categorical figure
+    if (!is.null(x_labels))
+      p <- p + ggplot2::theme(
+        axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
     # per-question slope on a fixed line below the counts
     if (!is.null(trends_df))
@@ -1371,12 +1462,14 @@ fit_select_all <- function(data, x, id = "ResponseId",
 
   structure(
     list(x = x, x_type = x_type, x_coerced = x_was_coerced,
+         x_labels = x_labels,
          n_distinct_x = n_distinct_x,
          n_obs = nrow(data), n_id = dplyr::n_distinct(data[[id]]),
          re.form = re.form, pred_re_form = pred_re_form,
          pred_at_observed = pred_at_observed,
          data = data, fit = fit,
-         emm = emm, raw = raw, cld = cld_df, trends = trends_df, plot = p,
+         emm = emm, emm_line = emm_line,
+         raw = raw, cld = cld_df, trends = trends_df, plot = p,
          chisq_test = chisq_test, omni = omni,
          q_type = q_type, re_structure = re_structure,
          order = ord, labels = lab_map, cells = tab),
@@ -1575,6 +1668,16 @@ check_cells <- function(long, x, min_n = 5,
 
   x_type <- match.arg(x_type)
   is_cont <- identical(x_type, "continuous")
+
+  # An ordered factor arrives here un-coerced (fit_select_all() does the
+  # coercion later). Score it the same way - numeric labels as numbers,
+  # otherwise level position - so the range checks below compare numbers.
+  # Without this, an all-yes or all-no item makes the x_yes/x_no columns
+  # mix <ordered> and <double> across groups and summarise() errors.
+  if (is_cont && !is.numeric(long[[x]])) {
+    num <- suppressWarnings(as.numeric(as.character(long[[x]])))
+    long[[x]] <- if (anyNA(num)) as.integer(factor(long[[x]])) else num
+  }
 
   # .drop = FALSE materialises unused FACTOR combinations so that genuinely
   # empty cells appear as n == 0 rows. A numeric has no levels, so it does
@@ -1878,10 +1981,15 @@ run_sa_cell <- function(survey, sa, demo,
       error = sprintf("fewer than 2 %s or 2 items remain",
                       if (is_cont) "distinct x values" else "levels"))))
                    
+  # x_type must be passed explicitly: fit_select_all() defaults to
+  # "continuous", so without this gender and work sector were silently
+  # recoded to 1..K and fitted as a slope.
   fit <- try(
     run_select_all(long, x = demo$var, tag = tag,
                    q_type = sa$q_type, verbose = verbose,
-                   re_structure = sa$re_structure, ...),
+                   re_structure = sa$re_structure,
+                   x_type = if (is_cont) "continuous" else "categorical",
+                   ...),
     silent = TRUE)
 
     # print(lme4::VarCorr(fit_cor))
