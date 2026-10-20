@@ -440,46 +440,55 @@ print.ordinal_by <- function(z, ...) {
 #                                   covariate = cov, min_distinct_x = 3,
 #                                   verbose = verbose), silent = TRUE)
 
-
 fit_ordinal_by_continuous <- function(data, x, y,
                                       covariate       = "career_stage",
                                       link            = "probit",
-                                      check_linearity = TRUE,
-                                      spline_df       = 3,
                                       min_n           = 20,
                                       min_distinct_x  = 6,
                                       wrap_facet      = 20,
                                       wrap_axis       = 12,
                                       discrete_axis   = TRUE,
+                                      # ---- NEW ---------------------------
+                                      # draw the model's fitted curve over
+                                      # the observed bars
+                                      show_line       = TRUE,
+                                      # grid resolution for the smooth line;
+                                      # only used when discrete_axis = FALSE
+                                      n_grid          = 100,
+                                      # the fitted line is drawn SOLID when
+                                      # the LRT for x is below this and
+                                      # DOTTED when it is not
+                                      sig_level       = 0.05,
+                                      # ------------------------------------
                                       verbose         = TRUE) {
- 
+
   stopifnot(all(c(x, y) %in% names(data)))
- 
+
   # ---- 1. prepare and screen ------------------------------------
   dat <- data %>%
     dplyr::filter(!is.na(.data[[x]]), !is.na(.data[[y]])) %>%
     droplevels()
- 
+
   # x_labels keeps the original factor labels for the axis, so a coerced
   # ordinal predictor still reads legibly in the figure.
   x_labels <- NULL
- 
+
   if (!is.numeric(dat[[x]])) {
- 
+
     if (!is.ordered(dat[[x]]) && is.factor(dat[[x]]))
       stop(x, " is an UNORDERED factor. There is no defensible numeric ",
            "scoring - use fit_ordinal_by() instead, or make it ordered ",
            "first if the ordering is real.")
- 
+
     num <- suppressWarnings(as.numeric(as.character(dat[[x]])))
- 
+
     if (!anyNA(num)) {
       # labels are themselves numbers: use them directly
       message(x, " coerced from factor labels to numeric.")
       x_labels <- stats::setNames(as.character(dat[[x]]), as.character(num))
       x_labels <- x_labels[!duplicated(names(x_labels))]
       dat[[x]] <- num
- 
+
     } else {
       # text labels on an ordered factor: score by level POSITION (1..K).
       # This imposes EQUAL SPACING between adjacent levels, which is
@@ -495,55 +504,42 @@ fit_ordinal_by_continuous <- function(data, x, y,
       dat[[x]] <- as.integer(dat[[x]])
     }
   }
- 
+
   if (!is.ordered(dat[[y]]))
     stop(y, " must be an ordered factor.")
- 
+
   if (nrow(dat) < min_n)
     stop("Only ", nrow(dat), " complete cases; min_n = ", min_n, ".")
- 
+
   n_distinct_x <- dplyr::n_distinct(dat[[x]])
   if (n_distinct_x < min_distinct_x)
     stop(x, " takes only ", n_distinct_x, " distinct values (min_distinct_x = ",
          min_distinct_x, "). Below this the equal-spacing assumption a slope ",
          "makes is doing real work - use fit_ordinal_by() with mo() or ",
          "factor coding instead, or lower min_distinct_x deliberately.")
- 
-  # ---- 2. linearity on the latent scale --------------------------
-  # The cumulative model assumes x shifts the latent variable linearly.
-  # Compare against a natural spline; a significant improvement means the
-  # single slope is hiding curvature. This tests the latent-scale SHAPE,
-  # not the proportional-odds assumption (po_test, below).
-  lin_test <- NULL; fit_spline <- NULL
-  if (check_linearity && n_distinct_x > spline_df + 2) {
-    f_lin <- stats::as.formula(sprintf("%s ~ %s", y, x))
-    f_spl <- stats::as.formula(
-      sprintf("%s ~ splines::ns(%s, df = %d)", y, x, spline_df))
- 
-    fit_l      <- try(ordinal::clm(f_lin, data = dat, link = link), silent = TRUE)
-    fit_spline <- try(ordinal::clm(f_spl, data = dat, link = link), silent = TRUE)
- 
-    if (.clm_ok(fit_l) && .clm_ok(fit_spline)) {
-      lin_test <- anova(fit_l, fit_spline)
-    } else {
-      warning("Spline model did not converge; linearity not tested.",
-              call. = FALSE)
-      fit_spline <- NULL
-    }
-  }
- 
-  # ---- 3. interaction with the covariate (diagnostic) ------------
+
+  # NOTE on linearity. The cumulative model assumes x shifts the latent
+  # variable LINEARLY. That assumption is no longer TESTED here: a spline
+  # comparison needs more distinct x values, and more respondents per
+  # value, than this survey provides, and a test that is underpowered by
+  # construction is worse than no test, because a non-significant result
+  # gets read as evidence FOR linearity. It is assessed graphically
+  # instead - the fitted curve is drawn over the observed proportions
+  # below, so systematic departure is visible. Report it that way:
+  # "linearity on the latent scale was assessed graphically", not tested.
+
+  # ---- 2. interaction with the covariate (diagnostic) ------------
   int_test <- NULL; fit_int <- NULL
   if (!is.null(covariate) && covariate %in% names(dat)) {
     dat_int <- dat %>%
       dplyr::filter(!is.na(.data[[covariate]])) %>% droplevels()
- 
+
     f_int <- stats::as.formula(sprintf("%s ~ %s * %s", y, x, covariate))
     f_add <- stats::as.formula(sprintf("%s ~ %s + %s", y, x, covariate))
- 
+
     fit_int <- try(ordinal::clm(f_int, data = dat_int, link = link), silent = TRUE)
     fit_add <- try(ordinal::clm(f_add, data = dat_int, link = link), silent = TRUE)
- 
+
     if (.clm_ok(fit_int) && .clm_ok(fit_add)) {
       int_test <- anova(fit_add, fit_int)
     } else {
@@ -553,11 +549,11 @@ fit_ordinal_by_continuous <- function(data, x, y,
       fit_int <- NULL
     }
   }
- 
-  # ---- 4. final model: x alone, pooled over the covariate --------
+
+  # ---- 3. final model: x alone, pooled over the covariate --------
   fit <- ordinal::clm(stats::as.formula(sprintf("%s ~ %s", y, x)),
                       data = dat, link = link)
- 
+
   if (!.clm_usable(fit))
     warning("Final model convergence code ",
             paste(fit$convergence$code, collapse = "/"),
@@ -565,61 +561,58 @@ fit_ordinal_by_continuous <- function(data, x, y,
             "is INVALID. Usually a sparsely populated outcome category - ",
             "check table(dat[[y]]) and collapse it, or refit with brms.",
             call. = FALSE)
- 
+
   scale_chk <- try(ordinal::scale_test(fit), silent = TRUE)
   po_chk <- try(
     anova(fit, ordinal::clm(stats::as.formula(sprintf("%s ~ 1", y)),
                             nominal = stats::as.formula(paste("~", x)),
                             data = dat, link = link)),
     silent = TRUE)
- 
+
   lrt <- drop1(fit, test = "Chisq")
- 
+
   # ---- effect size -----------------------------------------------
   b  <- stats::coef(fit)[x]
   ci <- stats::confint(fit)[x, ]
   slope <- tibble::tibble(term     = x,
                           estimate = unname(b),
                           conf.low = ci[[1]], conf.high = ci[[2]])
- 
+
   # average marginal effect on the probability scale, per outcome category
   ame <- try(
     as.data.frame(marginaleffects::avg_slopes(fit, variables = x,
                                               type = "prob")),
     silent = TRUE)
- 
+
   if (verbose) {
     print(summary(fit)); print(lrt)
     cat(sprintf("\nslope: %.3f [%.3f, %.3f] probit SD per unit of %s\n",
                 slope$estimate, slope$conf.low, slope$conf.high, x))
-    if (!is.null(lin_test)) {
-      cat("\nlinearity (linear vs spline):\n"); print(lin_test)
-    }
     if (!is.null(int_test)) {
       cat("\ninteraction with ", covariate, ":\n", sep = ""); print(int_test)
     }
   }
- 
+
   # ---- predicted probabilities at the observed values of x -------
   # do.call splices a named list in as an ordinary argument. datagrid()
   # does not support dynamic dots, so `!!x := grid` errors there.
   lv_y  <- levels(dat[[y]])
   x_val <- sort(unique(dat[[x]]))
- 
+
   nd <- do.call(marginaleffects::datagrid,
                 c(list(model = fit), stats::setNames(list(x_val), x)))
- 
+
   emm <- as.data.frame(
     marginaleffects::predictions(fit, newdata = nd, type = "prob"))
   emm[[y]] <- factor(as.character(emm$group), levels = lv_y)
- 
+
   raw <- dat %>%
     dplyr::count(.data[[x]], .data[[y]], .drop = FALSE) %>%
     dplyr::group_by(.data[[x]]) %>%
     dplyr::mutate(prop = n / sum(n)) %>%
     dplyr::ungroup()
   raw[[y]] <- factor(as.character(raw[[y]]), levels = lv_y)
- 
+
   # discrete_axis = TRUE spaces the values evenly, like the categorical
   # figure. Set FALSE when the numeric gaps are uneven (0, 1, 2, 5, 10),
   # since equal spacing would then misrepresent them.
@@ -630,10 +623,70 @@ fit_ordinal_by_continuous <- function(data, x, y,
     emm$.x_plot <- emm[[x]]
     raw$.x_plot <- raw[[x]]
   }
- 
+
+  # ---- fitted curve ----------------------------------------------
+  # This is both the model summary and the linearity diagnostic now that
+  # the spline test is gone: systematic departure of the bars from the
+  # curve is what a formal test would have been looking for.
+  #
+  # On a DISCRETE axis there is nowhere to put intermediate x values, so
+  # the curve can only join the predictions at the observed values. The
+  # pointranges already carry the interval at exactly those points, so no
+  # ribbon is drawn - it would double-encode the same uncertainty.
+  #
+  # On a CONTINUOUS axis a fine grid shows the real shape. Note that a
+  # probit model is linear on the LATENT scale but S-shaped in
+  # probability, so the curve is not expected to be straight.
+  # Line style encodes whether the effect of x is distinguishable from
+  # zero, using the same LRT reported in $lrt rather than a separate test.
+  # A dotted line still shows the model's fitted shape but signals that
+  # the slope is not supported, so a reader is not invited to read a
+  # trend into it.
+  p_x       <- lrt[["Pr(>Chi)"]][2]
+  x_sig     <- !is.na(p_x) && p_x < sig_level
+  line_type <- if (x_sig) "solid" else "dotted"
+
+  emm_line <- NULL
+  if (show_line) {
+    if (discrete_axis) {
+      emm_line <- emm
+    } else {
+      x_grid <- seq(min(x_val), max(x_val), length.out = n_grid)
+      nd_g <- do.call(marginaleffects::datagrid,
+                      c(list(model = fit), stats::setNames(list(x_grid), x)))
+      emm_line <- as.data.frame(
+        marginaleffects::predictions(fit, newdata = nd_g, type = "prob"))
+      emm_line[[y]]    <- factor(as.character(emm_line$group), levels = lv_y)
+      emm_line$.x_plot <- emm_line[[x]]
+    }
+  }
+
   p <- ggplot2::ggplot(emm, ggplot2::aes(.x_plot, estimate)) +
     ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
-                      fill = "grey85", width = .7) +
+                      fill = "grey85", width = .7)
+
+  # added before the pointranges so the points sit on top of the curve
+  if (!is.null(emm_line)) {
+
+    if (!discrete_axis)
+      p <- p + ggplot2::geom_ribbon(
+        data = emm_line,
+        ggplot2::aes(x = .x_plot, ymin = conf.low, ymax = conf.high,
+                     group = 1),
+        fill = "firebrick", alpha = .15, inherit.aes = FALSE)
+
+    # group = 1 is required on a discrete axis: without it ggplot treats
+    # each x position as its own group and draws no line at all
+    # linetype is set OUTSIDE aes(): it is one fixed style for the whole
+    # layer, not a mapping, so no legend is produced
+    p <- p + ggplot2::geom_line(
+      data = emm_line,
+      ggplot2::aes(x = .x_plot, y = estimate, group = 1),
+      colour = "firebrick", linewidth = .5, linetype = line_type,
+      inherit.aes = FALSE)
+  }
+
+  p <- p +
     ggplot2::geom_pointrange(
       ggplot2::aes(ymin = conf.low, ymax = conf.high),
       colour = "firebrick", size = .3) +
@@ -644,42 +697,52 @@ fit_ordinal_by_continuous <- function(data, x, y,
     ggplot2::scale_y_continuous(
       labels = scales::percent,
       expand = ggplot2::expansion(mult = c(.05, .12))) +
-    ggplot2::labs(x = x, y = "P(category)",
-                  caption = "grey = observed; red = model estimate") +
+    ggplot2::labs(
+      x = x, y = "P(category)",
+      caption = sprintf(
+        paste("grey = observed; red points = model estimate at the",
+              "observed values of %s\nfitted line: solid if p < %s,",
+              "dotted otherwise (here p = %s)"),
+        x, format(sig_level),
+        if (is.na(p_x)) "NA"
+        else if (p_x < .001) "< .001"
+        else sprintf("%.3f", p_x))) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
- 
+
   # put the original factor labels back on the axis when x was coerced
   if (discrete_axis && !is.null(x_labels))
     p <- p + ggplot2::scale_x_discrete(
       labels = scales::label_wrap(wrap_axis)(x_labels[as.character(x_val)]))
- 
+
   structure(list(
     x = x, y = y, n = nrow(dat), n_distinct_x = n_distinct_x,
     x_labels = x_labels,
-    data = dat, fit = fit, fit_int = fit_int, fit_spline = fit_spline,
+    data = dat, fit = fit, fit_int = fit_int,
     slope = slope, ame = ame, lrt = lrt,
-    lin_test = lin_test, int_test = int_test,
+    # what the figure's line style was based on, so it can be reported
+    p_x = p_x, x_sig = x_sig, line_type = line_type, sig_level = sig_level,
+    int_test = int_test,
     scale_test = scale_chk, po_test = po_chk,
-    emm = emm, raw = raw, plot = p
+    emm = emm, emm_line = emm_line, raw = raw, plot = p
   ), class = "ordinal_by_cont")
 }
- 
- 
+
+
 print.ordinal_by_cont <- function(z, ...) {
- 
+
   cat(sprintf("\n%s ~ %s   (n = %d, %d distinct values of %s)\n",
               z$y, z$x, z$n, z$n_distinct_x, z$x))
- 
+
   s <- z$slope
   cat(sprintf("slope   b = %.3f [%.3f, %.3f]  (probit SD per unit of %s)\n",
               s$estimate, s$conf.low, s$conf.high, z$x))
- 
+
   p <- z$lrt[["Pr(>Chi)"]][2]
   cat(sprintf("        LRT chi2 = %.2f, df = %d, p = %s\n",
               z$lrt[["LRT"]][2], z$lrt[["Df"]][2],
               if (p < .001) "< .001" else sprintf("%.3f", p)))
- 
+
   fmt <- function(tst, lab, pcol = "Pr(>Chisq)") {
     if (is.null(tst)) {
       cat(sprintf("%-16s not tested\n", lab)); return(invisible())
@@ -689,15 +752,17 @@ print.ordinal_by_cont <- function(z, ...) {
                 if (pv < .001) "< .001" else sprintf("%.3f", pv),
                 if (pv < .05) "   <- flagged" else ""))
   }
- 
+
   cat("\n")
-  fmt(z$lin_test, "linearity")
   fmt(z$int_test, "x covariate")
+  # said explicitly rather than omitted, so a reader of the console output
+  # does not assume linearity was checked and passed
+  cat(sprintf("%-16s assessed graphically (see $plot), not tested\n",
+              "linearity"))
   cat("\n")
- 
+
   invisible(z)
 }
-
 
 
 # =================================================================
@@ -1567,7 +1632,13 @@ demo_specs <- list(
     var   = "policies",
     label = "institutional policies",
     drop  = c("There are not any policies or guidelines at my institution", "Other"),
-    type  = "count")    
+    type  = "count"),
+
+    ai_use_freq = list(
+    var   = "ai_use_freq",
+    label = "AI use frequency",
+    drop  = character(0),
+    type  = "count")
 )
 
 
@@ -1590,7 +1661,6 @@ prep_demo <- function(survey, spec) {
   } else if (!is.factor(d[[v]])) {
     d[[v]] <- factor(d[[v]])
   }
-
   droplevels(d)
 }
 
@@ -2013,7 +2083,13 @@ run_sa_cell <- function(survey, sa, demo,
 
 
 # ---- run the whole grid --------------------------------------------
-sa_grid <- tidyr::expand_grid(sa = names(sa_specs), demo = names(demo_specs))
+# sa_grid <- tidyr::expand_grid(sa = names(sa_specs), demo = names(demo_specs))
+sa_grid <- tidyr::expand_grid(sa = c("opportunity", "challenges"),
+ demo = c("career_stage","gender", "prof_work_sector", "IO","ds_freq","policies"))
+
+#examine reasons not be demo but by AI use freq
+sa_grid <- sa_grid %>%
+  bind_rows(., tibble (sa = "reasons", demo = c("ai_use_freq")))
 
 sa_results <- lapply(seq_len(nrow(sa_grid)), function(i) {
   sa   <- sa_grid$sa[[i]]
@@ -2085,7 +2161,7 @@ dplyr::filter(sa_summary, !is.na(error))
 }
 
 # a single plot
-# sa_results$opportunity__career_stage$res$pop$plot
+# sa_results$opportunity__career_stage$res$subj$plot
 
 
 # =================================================================
@@ -2131,7 +2207,8 @@ run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
   list(tag = tag, res = fit, error = NA_character_)
 }
 
-ord_grid <- tidyr::expand_grid(ord = names(ord_specs), demo = names(demo_specs))
+ord_grid <- tidyr::expand_grid(ord = names(ord_specs), demo = names(demo_specs)) %>%
+  dplyr::filter(!ord == demo)
 
 ord_results <- purrr::pmap(ord_grid, function(ord, demo)
   run_ord_cell(survey, ord_specs[[ord]], demo_specs[[demo]]))
@@ -2155,8 +2232,6 @@ ord_summary <- purrr::imap_dfr(ord_results, function(z, nm) {
       p_main   = f$lrt[["Pr(>Chi)"]][2],
       p_int    = if (is.null(f$int_test)) NA_real_
                  else f$int_test[["Pr(>Chisq)"]][2],
-      p_linear = if (is.null(f$lin_test)) NA_real_
-                 else f$lin_test[["Pr(>Chisq)"]][2],
       dropped  = if (!is.null(f$dropped) && nrow(f$dropped))
                    paste(f$dropped[[f$x]], collapse = "; ") else "")
 })
