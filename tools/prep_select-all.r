@@ -41,7 +41,7 @@ prep_select_all <- function(df = NULL, q = NULL, grp = NULL, summarize = TRUE){
   }
   
   # Pare down columns
-  need_cols <- intersect(x = names(df_v02), y = c("ResponseId", q, grp))
+  need_cols <- intersect(x = names(df_v02), y = c("ResponseId", q, grp, paste0(q, "__value"), paste0(grp, "__value")))
   df_v03 <- dplyr::select(.data = df_v02, dplyr::all_of(need_cols))
 
   # Handle difference between commas in actual response text versus collapsing char
