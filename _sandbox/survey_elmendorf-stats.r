@@ -1212,13 +1212,7 @@ fit_select_all <- function(data, x, id = "ResponseId",
   # plogis(a + b * x) is an S-curve, so a straight line is not expected:
   # it is steepest near 50% and flattens towards 0% and 100%.
   #
-  # The old version predicted only at the K observed x values and let
-  # geom_line() join them, which drew that S-curve as a polyline with a
-  # corner at every observed value. With re.form = NULL it also averaged
-  # each point over a DIFFERENT set of people (whoever happened to be in
-  # that x group), so the points were not on one smooth curve at all.
-  #
-  # Now the curve is evaluated on a fine grid that includes the observed
+  # Curve is evaluated on a fine grid that includes the observed
   # values (so the points sit exactly on it):
   #   re.form = NA    fixed effects only: the typical-respondent curve,
   #                   exactly linear on the logit scale.
@@ -1230,7 +1224,7 @@ fit_select_all <- function(data, x, id = "ResponseId",
   #                   exactly linear on the logit scale either - that is a
   #                   property of averaging a nonlinear function, not noise.
   # With more than grid_threshold distinct values only the curve is drawn,
-  # with re.form = NA, as before.
+  # with re.form = NA.
   .re_zero <- function(r) !is.null(r) && !inherits(r, "formula") &&
     length(r) == 1L && is.na(r)
 
@@ -1255,8 +1249,6 @@ fit_select_all <- function(data, x, id = "ResponseId",
                                              length.out = grid_n))))
 
     if (.re_zero(pred_re_form)) {
-      # datagrid() does not accept dynamic dots, so the x column is named
-      # through setNames rather than `!!x :=`
       nd <- do.call(
         marginaleffects::datagrid,
         c(list(model = fit, question = unique(as.character(data$question))),
@@ -1364,9 +1356,7 @@ fit_select_all <- function(data, x, id = "ResponseId",
 
   # Cast both key columns to the same type before joining: cld() returns a
   # plain factor and character question, raw has ordered / factor.
-  # CATEGORICAL ONLY - the old version ran this unconditionally, and with a
-  # numeric x `levels()` is NULL, so factor(..., levels = NULL) turned the
-  # whole column into NA and silently broke the join.
+  # CATEGORICAL ONLY 
   if (!is_cont && !is.null(cld_df)) {
     harmonise <- function(d) {
       d[[x]] <- factor(as.character(d[[x]]), levels = x_levels)
@@ -1666,19 +1656,16 @@ prep_demo <- function(survey, spec) {
 
 
 # ---- select-all questions -----------------------------------------
-# free-text "Other" answers that need reassigning on the opportunities item
-opps_none_text <- c(
-  "Currently I feel none, but I would be hesitantly open to being convinced of a specific benefit of AI",
-  "There is no ethical way to use generative AI given its current ownership model",
-  "Having said all these nasty things about AI and about the amoral engineers who are leading us down the garden path, I will admit that several of my colleagues, who have large data sets, have used several programs, and have clearly drunk the coolaid."
-)
-opps_some_text <- "faster work (does not equal quality work)."
+# free-text "Other" answers that one could consder could be entered here
+# now handled by consensus in the filtering
+# opps_none_text <- c(
+#   "example something",
+#   )
+# opps_some_text <- "another example"
 
 clean_opps <- function(long)
   clean_select_all(long, q = "promising_opps", none_pattern = "None",
-                   text_col  = "promising_opps_14_text",
-                   none_text = opps_none_text,
-                   some_text = opps_some_text)
+                   text_col  = "promising_opps_14_text")
 
 clean_challenges <- function(long)
   clean_select_all(long, q = "challenges", none_pattern = "^No")
