@@ -34,7 +34,7 @@ vals_v01 <- read.csv(file.path("data", vals_file))
 # dplyr::glimpse(vals_v01)
 
 ## -------------------------------------------- ##
-# Generate Question Ref Table
+# Generate Question Ref Table ----
 ## -------------------------------------------- ##
 
 # Split off question lookup table
@@ -49,7 +49,7 @@ lookup <- labs_v01 %>%
 dplyr::glimpse(lookup)
 
 ## -------------------------------------------- ##
-# Combine Data ----
+# Streamline 'Values Only' Data ----
 ## -------------------------------------------- ##
 
 # Identify 'selected choice' questions
@@ -72,6 +72,10 @@ setdiff(x = names(vals_v01), y = gsub(pattern = "__value", replacement = "", nam
 
 # Check structure
 dplyr::glimpse(vals_v02)
+
+## -------------------------------------------- ##
+# Combine Values & Labels Data ----
+## -------------------------------------------- ##
 
 # Join the two datasets by responseId and drop duplicate cols
 svy_v01 <- labs_v01 %>%
@@ -102,19 +106,22 @@ svy_v02 <- svy_v01 %>%
   dplyr::filter(DistributionChannel != "preview") %>%
   dplyr::filter(StartDate >= "2026-07-14 00:00:00") %>%
   dplyr::filter(ConsentQ == "Yes") %>%
-  # current qualtrics docs; indicates v3 google recaptcha at present
-  # Best practice would probably be to strip a few more, though the ones with
-  # low or missing recaptchas seem very real on inspection, leave for now
-  # https://www.qualtrics.com/support/survey-platform/survey-module/survey-checker/fraud-detection/
-  # https://developers.google.com/recaptcha/docs/v3#interpreting_the_score
+  ## current qualtrics docs; indicates v3 google recaptcha at present
+  ## Best practice would probably be to strip a few more, though the ones with
+  ## low or missing recaptchas seem very real on inspection, leave for now
+  ## https://www.qualtrics.com/support/survey-platform/survey-module/survey-checker/fraud-detection/
+  ## https://developers.google.com/recaptcha/docs/v3#interpreting_the_score
   dplyr::filter(Q_RecaptchaScore > 0 & !is.na(Q_RecaptchaScore)) %>% # PLACEHOLDER!
   dplyr::filter(Duration..in.seconds. > 0) %>% # PLACEHOLDER!
   dplyr::relocate(ResponseId, .before = dplyr::everything()) %>%
   dplyr::select(-StartDate:-IPAddress, -Finished:-ExternalReference, -DistributionChannel, -UserLanguage) %>%
-  filter(!if_all(-ResponseId, ~ . == "" | is.na(.)))
+  dplyr::filter(!if_all(-ResponseId, ~ . == "" | is.na(.)))
 
 # Check lost columns
 supportR::diff_check(old = names(svy_v01), new = names(svy_v02))
+
+# Check lost rows
+message(nrow(svy_v01) - nrow(svy_v02), " rows lost (of ", nrow(svy_v01), ")")
 
 # Check structure
 dplyr::glimpse(svy_v02)
@@ -172,6 +179,8 @@ dplyr::glimpse(svy_v05)
 ## -------------------------------------------- ##
 # Collapse Free Text to Categories ----
 ## -------------------------------------------- ##
+# The rationale for this is more completely described in the following GitHub issue
+## https://github.com/CU-ESIIL/AI-in-a-day_perspective-survey/issues/5
 
 # Some free text answers basically fit a category option, fix those here
 svy_v06 <- svy_v05 %>% 
@@ -270,27 +279,64 @@ svy_v08 <- svy_v07 %>%
 dplyr::glimpse(svy_v08)
 
 ## -------------------------------------------- ##
+# Filter Out Non-Env Scientists ----
+## -------------------------------------------- ##
+# The rationale for this is more completely described in the following GitHub issue
+## https://github.com/CU-ESIIL/AI-in-a-day_perspective-survey/issues/5
+
+# Remove non-environmental scientists
+svy_v09 <- svy_v08 %>% 
+  dplyr::filter(!ResponseId %in% c(
+    "R_3rTvH6ljTGPg6qA", # Business & Admin
+    "R_1oGdxA1AdxaA2CG", # Business systems analyst
+    "R_5AAzDzrN98CLy5H",  # Finance
+    "R_34AUNHydbt2tBuZ", "R_5th5ERJ7o1OdIVl" # Current undergraduates
+    ))
+
+# How many response IDs lost?
+message(nrow(svy_v08) - nrow(svy_v09), " rows lost (of ", nrow(svy_v08), ")")
+
+# Check its structure
+dplyr::glimpse(svy_v09)
+
+## -------------------------------------------- ##
+# Steamline Some 'Select All' Qs ----
+## -------------------------------------------- ##
+# The rationale for this is more completely described in the following GitHub issue
+## https://github.com/CU-ESIIL/AI-in-a-day_perspective-survey/issues/5
+
+# Consolidate some 'select all' Qs where redundant options were chosen
+svy_v10 <- svy_v09 %>% 
+  dplyr::mutate(
+    PromisingOpps = dplyr::case_when(
+      ResponseId %in% c("R_6RkKnFJynmXrOgh", "R_5BzxEjYGKDZAmc1") ~ "None (No opportunities associated with using GenAI for research and learning)",
+      ResponseId == "R_1ZBuUwTFDPo2pQt" ~ "Other",
+      TRUE ~ PromisingOpps))
+
+# Check structure
+dplyr::glimpse(svy_v10)
+
+## -------------------------------------------- ##
 # Generate Needed Categories ----
 ## -------------------------------------------- ##
 
 # Identify synthetic categories / combined "bins" of categories
-svy_v09 <- svy_v08 %>% 
+svy_v11 <- svy_v10 %>% 
   dplyr::mutate(
     AI_powerUser = ifelse(Gen_Attitude == "Very enthusiastic" & AIUse_Freq == "Daily",
       yes = TRUE, no = FALSE),
     AIUse_FreqBins = ifelse(AIUse_Freq %in% c("Daily", "Weekly"),
-      yes = "High GenAI Use", no = "Low GenAI Use")
-    )
+      yes = "High GenAI Use", no = "Low GenAI Use"))
 
 # Check structure
-dplyr::glimpse(svy_v09)
+dplyr::glimpse(svy_v11)
 
 ## -------------------------------------------- ##
 # Export Outputs ----
 ## -------------------------------------------- ##
 
 # Make a final data object
-svy_v99 <- svy_v09
+svy_v99 <- svy_v11
 
 # Check its structure
 dplyr::glimpse(svy_v99)
