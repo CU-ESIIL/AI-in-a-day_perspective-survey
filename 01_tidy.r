@@ -191,17 +191,33 @@ svy_v06 <- svy_v05 %>%
       ResponseId %in% c("R_77O6CutSweqRQNV") ~ "Indifferent",
       ResponseId %in% c("R_52S1axziGbSHgBI", "R_51bPIWmQCeG3YIS") ~ "Opposed to GenAI",
       TRUE ~ Gen_Attitude),
+    Gen_Attitude__value = dplyr::case_when(
+      ResponseId %in% c("R_72DqErU1RKlomk4", "R_6JIyM9ckunDqbZL") ~ 17,
+      ResponseId %in% c("R_1D0WZnaWFyY0ShD", "R_549OELlldpZxBn3", "R_6NUrsLj5l2XtkQw", "R_5wageMTUtwE1X5Y") ~ 12,
+      ResponseId %in% c("R_77O6CutSweqRQNV") ~ 20,
+      ResponseId %in% c("R_52S1axziGbSHgBI", "R_51bPIWmQCeG3YIS") ~ 11,
+      TRUE ~ Gen_Attitude__value),
     Policies = dplyr::case_when(
       ResponseId %in% c("R_7UlC1YeZPZVWL61", "R_8HictsFKz8JaTBS", "R_3U3FkFAqDBqAO0y") ~ "Somewhat permissive/supportive",
       ResponseId %in% c("R_58NClRQT7Fb4KzQ", "R_5egiapYCSPa7pPj") ~ "There are not any policies or guidelines at my institution",
       ResponseId %in% c("R_6ncJ2fW6AzyM3fE", "R_7OUBKpp9fT5dyKH") ~ "Very permissive/supportive",
       TRUE ~ Policies),
+    Policies__value = dplyr::case_when(
+      ResponseId %in% c("R_7UlC1YeZPZVWL61", "R_8HictsFKz8JaTBS", "R_3U3FkFAqDBqAO0y") ~ 4,
+      ResponseId %in% c("R_58NClRQT7Fb4KzQ", "R_5egiapYCSPa7pPj") ~ 7,
+      ResponseId %in% c("R_6ncJ2fW6AzyM3fE", "R_7OUBKpp9fT5dyKH") ~ 5,
+      TRUE ~ Policies__value),
     Work_Sector = dplyr::case_when(
       ResponseId %in% c("R_3oC6hpYRNt9eJnl") ~ "Government (Federal, State, Local, Tribal)",
       ResponseId %in% c("R_51bPIWmQCeG3YIS") ~ "Industry / Private Sector",
       ResponseId %in% c("R_1D0WZnaWFyY0ShD") ~ "Non-Profit / NGO",
-      TRUE ~ Work_Sector))
-
+      TRUE ~ Work_Sector),
+    Work_Sector__value = dplyr::case_when(
+      ResponseId %in% c("R_3oC6hpYRNt9eJnl") ~ 2,
+      ResponseId %in% c("R_51bPIWmQCeG3YIS") ~ 3,
+      ResponseId %in% c("R_1D0WZnaWFyY0ShD") ~ 4,
+      TRUE ~ Work_Sector__value))
+      
 # Check gained/lost of affected questions
 supportR::count_diff(svy_v06$Gen_Attitude, svy_v05$Gen_Attitude)
 supportR::count_diff(svy_v06$Policies, svy_v05$Policies)
