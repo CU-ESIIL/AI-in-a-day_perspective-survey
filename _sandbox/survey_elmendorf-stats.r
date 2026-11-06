@@ -2475,8 +2475,7 @@ names(sa_results) <- paste(sa_grid$sa, sa_grid$demo, sep = "__")
 # the $trends limits: emmeans cannot FDR-adjust intervals and falls back to
 # Bonferroni ones. So a CI can exclude 1 while the FDR p is above .05.
 # NA for a categorical x (no slope).
-.item_or <- function(f) {
-  tr <- f$trends
+.item_or <- function(f, tr = f$trends) {
   if (is.null(tr)) return(NA_character_)
   tr <- tr[order(tr$question), ]
   item <- sub("\u2020", "", f$labels[as.character(tr$question)])
@@ -2484,6 +2483,24 @@ names(sa_results) <- paste(sa_grid$sa, sa_grid$demo, sep = "__")
   paste(sprintf("%s: OR %.2f (95%% CI %.2f-%.2f, p = %.3f)", item, tr$OR,
                 exp(tr$slope - z * tr$SE), exp(tr$slope + z * tr$SE), tr$p.value),
         collapse = "; ")
+}
+
+# the same string from the career-stage-adjusted fit, read from the saved model
+# so no refit is needed. Slopes are conditional on career stage (slope, varying
+# by item), on the respondents with a career stage. p is FDR-adjusted as above.
+# The figures stay unadjusted, so their line style follows item_or, not this.
+.item_or_adj <- function(f, a) {
+  if (is.null(f$trends) || is.null(a$fit_adj)) return(NA_character_)
+  tr <- try(as.data.frame(summary(
+    emmeans::emtrends(a$fit_adj, ~ question, var = f$x, nesting = NULL),
+    infer = c(TRUE, TRUE), adjust = "fdr")), silent = TRUE)
+  if (inherits(tr, "try-error")) return(NA_character_)
+  tr <- tr |>
+    dplyr::rename(slope = dplyr::matches("\\.trend$")) |>
+    dplyr::mutate(question = factor(as.character(question),
+                                    levels = levels(f$trends$question)),
+                  OR = exp(slope))
+  .item_or(f, tr)
 }
 
 if (length(sa_results)) {
@@ -2550,6 +2567,7 @@ sa_summary <- purrr::imap_dfr(sa_results, function(z, nm) {
       p_valence_adj  = ga("p_valence_adj"),
       p_item_int_cc  = ga("p_item_int_cc"),
       p_item_int_adj = ga("p_item_int_adj"),
+      item_or_adj    = if (a_ok) .item_or_adj(f, a) else NA_character_,
       adj_note       = if (is.null(a)) "not run (x is career stage)"
                        else if (!a_ok) paste("failed:", a$error)
                        else a$conv_adj)
