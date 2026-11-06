@@ -1,36 +1,59 @@
 # -------------------------------------------------
 # survey_elmendorf_survey_stats.R
 # -------------------------------------------------
-# Bayesian cumulative probit models with monotonic predictors where both
-# x and y are Likert (questions 1-3), GLMMs for select-all-that-apply
-# questions, and ordinal (clm) models for the remaining questions.
+# Frequentist cumulative probit models (ordinal::clm, probit link) for the
+# ordinal questions, and binomial GLMMs (lme4::glmer) for the
+# select-all-that-apply questions, each crossed with demographic predictors.
 #
 # Structure:
-#   1. setup, data read, factor releveling
-#   2. helper functions for the Likert-pair models
-#   3. Likert-pair analyses (Q1-Q3)
-#   4. helper functions for the select-all models
-#   5. select-all analyses
-#   6. gender / AI-use analysis
+#   1-3. setup, data read, factor releveling, ordinal-model helpers
+#   4.   helper functions for the select-all models
+#   5.   specs, cell diagnostics, and the select-all grid
+#   6.   ordinal grid (+ factor-vs-slope comparisons)
+#   6b.  table of every exclusion rule and its n
+#   7.   cross-tabs of demographics against career stage
+#   8.   pairwise associations among all demographics (polychoric /
+#        bias-corrected Cramer's V), plus gen_attitude x AI use frequency
+#
+# INFERENCE: everything here is EXPLORATORY. Each cell of the grids is
+# tested at alpha = .05 with NO correction across cells (~27 ordinal and
+# select-all cells, each with several tests), so some "significant" cells
+# are expected by chance alone. The only multiplicity adjustments are
+# WITHIN a cell: letter displays are mvt-adjusted within each item, and
+# per-item slopes are FDR-adjusted across the items of that cell. Report
+# p-values as descriptive strength of evidence, not confirmatory tests.
+#
+# Models are MARGINAL (one predictor at a time) for the figures. Each
+# cell is refitted with career stage added as a covariate (a slope on
+# career_stage_value, 1..4) as a sensitivity check; those results are in
+# the *_adj columns of the summary tables, next to the unadjusted test on
+# the SAME respondents (*_cc) so a change can be attributed to the
+# adjustment rather than to the respondents lost with missing career stage.
+#
+# Direction: ai_use_freq and ds_freq are re-ordered so HIGHER = MORE use
+# (Never / "do not use" is level 1, Daily the top level).
 # -------------------------------------------------
 
 # -------------------------------------------------
 # Project setup
 # -------------------------------------------------
-# TO DO
-# deal with the inconsistencies in the re.formula implementation
-# across brms vs emm in the predictions
-# https://github.com/easystats/modelbased/issues/579
 
 source(file.path("-setup.r"))          # clears environment, creates folders
 gc()
 
 set.seed(1)                            # reproducibility for anything stochastic
 
-# models are slow to run; set FALSE to reload cached fits while fiddling
-# with plots. Either way the objects you analyse are built by the same
-# summarise_likert_pair() call, so the two paths cannot drift apart.
-rerun_mods <- TRUE
+# Controls the select-all models, which take hours. Each finished fit is saved
+# to fit_path as soon as it completes. The ordinal models ignore this setting
+# and refit on every run.
+#   FALSE  reuse every saved fit and fit only the cells with no saved file.
+#          Use this to adjust figures or to resume an interrupted run.
+#   TRUE   refit every cell and overwrite its saved file, whether or not one
+#          exists. No need to delete anything first.
+# FALSE does not check whether a saved fit is out of date. After changing the
+# data or the model code, use TRUE, or delete the affected files in fit_path to
+# refit only those cells.
+rerun_mods <- FALSE
 
 # ------------------------------------------------------------------
 # CRAN mirror, so librarian::shelf installs without prompting
@@ -46,16 +69,14 @@ if (!requireNamespace("librarian", quietly = TRUE)) {
 librarian::shelf(
   scales,
   janitor,
-  brms,
   marginaleffects,
   emmeans,
   multcomp,          # cld() for the compact letter display
-  loo,
-  posterior,
-  bayestestR,
   lme4,
   performance,
   ordinal,
+  polycor,           # polychoric correlations among ordinal demographics
+  effectsize,        # bias-corrected Cramer's V
   lmtest,
   sandwich,
   tidyverse          # loaded last so dplyr wins the masking conflicts
@@ -68,14 +89,12 @@ if (requireNamespace("conflicted", quietly = TRUE)) {
   conflicted::conflict_prefer("select",    "dplyr", quiet = TRUE)
   conflicted::conflict_prefer("mutate",    "dplyr", quiet = TRUE)
   conflicted::conflict_prefer("summarise", "dplyr", quiet = TRUE)
-  conflicted::conflict_prefer("ar", "brms", quiet = TRUE)
   conflicted::conflict_prefer("chisq.test", "stats", quiet = TRUE)
   conflicted::conflict_prefer("col_factor", "scales", quiet = TRUE)
   conflicted::conflict_prefer("discard", "purrr", quiet = TRUE)
   conflicted::conflict_prefer("expand", "tidyr", quiet = TRUE)
   conflicted::conflict_prefer("fisher.test", "stats", quiet = TRUE)
   conflicted::conflict_prefer("geyser", "MASS", quiet = TRUE)
-  conflicted::conflict_prefer("kidney", "brms", quiet = TRUE)
   conflicted::conflict_prefer("lag", "dplyr", quiet = TRUE)
   conflicted::conflict_prefer("mad", "stats", quiet = TRUE)
   conflicted::conflict_prefer("match", "base", quiet = TRUE)
@@ -99,7 +118,7 @@ purrr::walk(
 # -------------------------------------------------
 # Paths
 # -------------------------------------------------
-data_path  <- file.path("data", "01_tidied-responses.csv")
+data_path  <- file.path("data", "1_tidied-responses_no-free-text.csv")
 graph_path <- "graphs"
 fig_path   <- file.path(graph_path, "analysis_figs_ordinal")
 fit_path   <- "fits_ordinal"
@@ -107,10 +126,6 @@ fit_path   <- "fits_ordinal"
 dir.create(fig_path, recursive = TRUE, showWarnings = FALSE)
 dir.create(fit_path, recursive = TRUE, showWarnings = FALSE)
 
-
-check_linearity = TRUE
-spline_df       = 3
-min_n           = 20
 
 # -------------------------------------------------
 # Read and clean
@@ -123,7 +138,9 @@ survey_raw <- read.csv(data_path, stringsAsFactors = FALSE) %>%
   )
 
 survey <- survey_raw %>%
-  clean_names()   # snake_case, removes spaces, etc.
+  clean_names() %>%   # snake_case, removes spaces, etc.
+  # no free text removed responseID, but it in here simply as the row number
+  mutate(response_id = row_number())
 
 # ------------------------------------------------------------------
 # Re-level the Likert columns so factor level order matches the
@@ -142,26 +159,92 @@ for (v in c("gen_attitude", "ds_freq", "ai_use_freq", "career_stage", "policies"
   survey <- relevel_by_value(survey, v)
 }
 
+# The Qualtrics coding runs Daily (1) -> Never / "do not use" (5), so a
+# positive slope would mean LESS use. Reverse both so higher = more use.
+# Note: the *_value columns are NOT reversed and are not used below.
+for (v in c("ai_use_freq", "ds_freq")) {
+  survey[[v]] <- factor(survey[[v]], levels = rev(levels(survey[[v]])),
+                        ordered = TRUE)
+}
+stopifnot(grepl("^Never", levels(survey$ai_use_freq)[1]),
+          grepl("^Daily", levels(survey$ai_use_freq)[nlevels(survey$ai_use_freq)]),
+          grepl("^I do not use", levels(survey$ds_freq)[1]))
+
+# gen_attitude sensitivity version: "Indifferent" merged into the middle
+# level ("A mix of caution and enthusiasm") instead of excluded. "Other"
+# is excluded in both versions. The original gen_attitude column is kept,
+# so figures can show which respondents in the merged level were
+# Indifferent (stacked bar, see .add_split_bars()).
+ga_mix_level <- grep("^A mix", levels(survey$gen_attitude), value = TRUE)
+stopifnot(length(ga_mix_level) == 1,
+          "Indifferent" %in% levels(survey$gen_attitude))
+survey$gen_attitude_mix <- local({
+  g <- as.character(survey$gen_attitude)
+  g[g %in% "Indifferent"] <- ga_mix_level
+  g[g %in% "Other"]       <- NA
+  factor(g, levels = setdiff(levels(survey$gen_attitude),
+                             c("Indifferent", "Other")),
+         ordered = TRUE)
+})
+
+# ------------------------------------------------------------------
+# Short level names for FIGURE AXES ONLY. The data, models and summary
+# tables keep the full Qualtrics text; fig_label() is applied inside the
+# axis label functions of the plotting helpers, and passes any label not
+# in the map through unchanged. Built from the releveled factor (ordered
+# by career_stage_value) rather than retyped, because the full labels
+# contain en-dashes.
+# ------------------------------------------------------------------
+stopifnot(nlevels(survey$career_stage) == 4,
+          grepl("^Preparation", levels(survey$career_stage)[1]),
+          grepl("^Mature",      levels(survey$career_stage)[4]))
+fig_short_labels <- stats::setNames(c("prep", "early", "mid", "mature"),
+                                    levels(survey$career_stage))
+
+# ds_freq "I do not use data science in my research/role" -> "no use".
+# Looked up by pattern rather than typed, so it tracks the exact text.
+ds_none <- grep("^I do not use data science", levels(survey$ds_freq), value = TRUE)
+stopifnot(length(ds_none) == 1)
+fig_short_labels <- c(fig_short_labels, stats::setNames("no use", ds_none))
+
+fig_label <- function(x) {
+  x <- as.character(x)
+  hit <- x %in% names(fig_short_labels)
+  x[hit] <- fig_short_labels[x[hit]]
+  x
+}
+
+# Human-readable variable names for FIGURE axis titles and captions,
+# from the `label` field of demo_specs (defined in section 5a; looked up
+# at plot time, so the order of definition does not matter). Falls back
+# to the column name for anything not in demo_specs.
+#   fig_var("ai_use_freq")        -> "AI use frequency"   (axis title)
+#   fig_var("ai_use_freq", FALSE) -> "AI use frequency"   (mid-sentence)
+#   fig_var("career_stage")       -> "Career stage" / "career stage"
+fig_var <- function(x, capitalise = TRUE) {
+  lab <- if (exists("demo_specs") && x %in% names(demo_specs) &&
+             !is.null(demo_specs[[x]]$label)) demo_specs[[x]]$label else x
+  if (capitalise) paste0(toupper(substring(lab, 1, 1)), substring(lab, 2))
+  else lab
+}
+
 # Ensure the ordinal helper columns are numeric.
 survey <- survey %>%
   dplyr::mutate(dplyr::across(dplyr::ends_with("_value"), as.numeric))
-
-unique (survey$work_sector)
-table(survey$work_sector)
 
 survey <-survey %>%
   dplyr::mutate(prof_work_sector =
     ifelse(grepl('Student', prof_role), 'Student', work_sector)
   )
 
-# 13 ambiguous, let's drop for now
+# 13 ambiguous on whether they are students or not
+# bc they say they are students but not in academia.
+# the reassigning assumes they are students and will drop from the
+# professionals only analysis 
+
 # ambiguous <- survey %>%
 #   filter(work_sector != "Academia (Higher Education)"& prof_work_sector == 'Student')
-
 # View (ambiguous %>% select(work_sector, prof_role, prof_work_sector))
-
-
-#View (survey %>% select(caregiver, caregiver_IO) %>% distinct())
 
 survey <- survey %>%
   mutate(caregiver_IO = 
@@ -185,69 +268,112 @@ survey <- survey %>%
   mutate(IO = caregiver_IO + neuro_IO + firstgen_IO + race_IO) 
 
 
-# ---- frequentist pre-check on the covariate -----------------------
-# Cheap clm test of whether the x effect differs across the covariate.
-# Both models are fitted to ONE dataset with complete cases on all three
-# variables, so the LRT compares genuinely nested models.
-covariate_check <- function(dat, x, y, covariate, link = "probit") {
-
-  if (is.null(covariate) || !covariate %in% names(dat)) return(NULL)
-
-  d <- dat %>%
-    dplyr::filter(!is.na(.data[[covariate]])) %>% droplevels()
-
-  f_add <- stats::as.formula(sprintf("%s ~ %s + %s", y, x, covariate))
-  f_int <- stats::as.formula(sprintf("%s ~ %s * %s", y, x, covariate))
-
-  m_add <- try(ordinal::clm(f_add, data = d, link = link), silent = TRUE)
-  m_int <- try(ordinal::clm(f_int, data = d, link = link), silent = TRUE)
-
- ok <- function(f) {
-    if (inherits(f, "try-error")) return(FALSE)
-    cc <- paste(f$convergence$code, collapse = "/")
-    !is.null(cc) && length(cc) > 0 && all(cc == 0)
-  }
-
-  if (!ok(m_add) || !ok(m_int)) {
-    warning("Covariate interaction model did not converge; not tested.",
-            call. = FALSE)
-    return(NULL)
-  }
-
-  anova(m_add, m_int)
+# ---- p-value formatting -------------------------------------------
+# Returns the comparison sign WITH the number, so format strings say
+# "p %s" and never "p = %s" (which gave "p = < .001"). APA style: no
+# leading zero, since p cannot exceed 1.
+#   fmt_p(0.0342) -> "= .034"    fmt_p(0.0001) -> "< .001"
+fmt_p <- function(p) {
+  if (length(p) != 1 || is.na(p)) return("= NA")
+  if (p < .001) return("< .001")
+  paste("=", sub("^0", "", sprintf("%.3f", p)))
 }
 
-
- 
 # ---- convergence helpers ------------------------------------------
 # clm's convergence$code can be a VECTOR when more than one condition
 # fires, so it must be collapsed before use in a scalar test.
 #   0  clean
 #   1  parameters may have few correct decimals (imprecise, usually fine)
 #  -3  thresholds not increasing -> the fit is INVALID, never interpret it
-.clm_ok <- function(f) {
-  if (inherits(f, "try-error")) return(FALSE)
-  cc <- f$convergence$code
-  !is.null(cc) && length(cc) > 0 && all(cc == 0)
-}
- 
 .clm_usable <- function(f) {
   if (inherits(f, "try-error")) return(FALSE)
   cc <- f$convergence$code
   !is.null(cc) && length(cc) > 0 && !any(cc == -3)
 }
- 
+
+# convergence code as one string: "0", "1", "-3", "0/1", or "error"
+.clm_code <- function(f) {
+  if (inherits(f, "try-error") || is.null(f)) return("error")
+  paste(f$convergence$code, collapse = "/")
+}
+
+# readable flag for a summary table; "" when the fit is clean
+.conv_flag <- function(code, name) {
+  if (is.null(code) || length(code) != 1 || is.na(code) || code == "0")
+    return(character(0))
+  sprintf("%s %s", name,
+          if (code == "error") "failed"
+          else if (grepl("-3", code)) sprintf("INVALID (code %s)", code)
+          else sprintf("imprecise (code %s)", code))
+}
+
+# ---- assumption checks for a fitted clm --------------------------
+# Fitted EXPLICITLY (rather than via ordinal::scale_test / nominal_test)
+# so each auxiliary model's convergence code is kept: an invalid (-3)
+# auxiliary fit gives a meaningless LRT, and its p is returned as NA.
+#   PO     y ~ 1, nominal = ~ x  vs  y ~ x   (nominal_test() does not
+#          support the probit link, hence the explicit partial-PO fit)
+#   scale  y ~ x, scale = ~ x    vs  y ~ x   (does x change the latent SD?)
+.assumption_checks <- function(fit, dat, x, y, link = "probit") {
+  nom <- try(suppressWarnings(ordinal::clm(
+    stats::as.formula(sprintf("%s ~ 1", y)),
+    nominal = stats::as.formula(paste("~", x)), data = dat, link = link)),
+    silent = TRUE)
+  scl <- try(suppressWarnings(ordinal::clm(
+    stats::as.formula(sprintf("%s ~ %s", y, x)),
+    scale = stats::as.formula(paste("~", x)), data = dat, link = link)),
+    silent = TRUE)
+
+  cmp <- function(alt) {
+    if (!.clm_usable(fit) || !.clm_usable(alt)) return(NULL)
+    t <- try(anova(fit, alt), silent = TRUE)
+    if (inherits(t, "try-error")) NULL else t
+  }
+  t_po <- cmp(nom)
+  t_sc <- cmp(scl)
+  pp <- function(t) if (is.null(t)) NA_real_ else t[["Pr(>Chisq)"]][2]
+
+  list(p_po = pp(t_po), p_scale = pp(t_sc),
+       conv_po = .clm_code(nom), conv_scale = .clm_code(scl),
+       test_po = t_po, test_scale = t_sc)
+}
+
+# ---- career-stage-adjusted sensitivity fit ------------------------
+# On the respondents with a career stage, fits
+#   y ~ x                 unadjusted, SAME respondents  (p_cc, b_cc)
+#   y ~ x + career        adjusted                     (p_adj, b_adj)
+# Career stage enters as a SLOPE on career_stage_value (1..4). x is used
+# exactly as in the model it accompanies (factor or numeric slope).
+.adjusted_clm <- function(dat, x, y, adj = "career_stage_value",
+                          link = "probit") {
+  stopifnot(adj %in% names(dat))
+  d <- droplevels(dat[!is.na(dat[[adj]]), , drop = FALSE])
+  f <- function(rhs) ordinal::clm(stats::as.formula(sprintf("%s ~ %s", y, rhs)),
+                                  data = d, link = link)
+  f_1  <- f("1")
+  f_x  <- f(x)
+  f_0  <- f(adj)
+  f_xa <- f(paste(x, "+", adj))
+
+  b <- function(m) if (is.numeric(d[[x]])) unname(stats::coef(m)[x]) else NA_real_
+
+  list(n      = nrow(d),
+       p_cc   = anova(f_1, f_x)[["Pr(>Chisq)"]][2],
+       p_adj  = anova(f_0, f_xa)[["Pr(>Chisq)"]][2],
+       b_cc   = b(f_x), b_adj = b(f_xa),
+       b_career = unname(stats::coef(f_xa)[adj]),
+       conv_adj = .clm_code(f_xa),
+       fit_adj = f_xa, error = NULL)
+}
+
  
 # =================================================================
 # fit_ordinal_by(): ordinal outcome ~ CATEGORICAL predictor
 #   1. drops predictor levels with < min_n respondents
-#   2. reports the predictor x covariate interaction (diagnostic only)
-#   3. fits the final model on x alone, pooled over the covariate
+#   2. fits the clm problit model of y as a function of x
 # =================================================================
 fit_ordinal_by <- function(data, x, y,
-                           drop_levels = character(0),
                            min_n       = 20,
-                           covariate   = "career_stage",
                            link        = "probit",
                            wrap_axis   = 12,
                            wrap_facet  = 20,
@@ -257,8 +383,7 @@ fit_ordinal_by <- function(data, x, y,
  
   # ---- 1. screen predictor levels -------------------------------
   dat <- data %>%
-    dplyr::filter(!is.na(.data[[x]]), !is.na(.data[[y]]),
-                  !.data[[x]] %in% drop_levels) %>%
+    dplyr::filter(!is.na(.data[[x]]), !is.na(.data[[y]])) %>%
     droplevels()
  
   if (!is.factor(dat[[x]])) {
@@ -281,36 +406,7 @@ fit_ordinal_by <- function(data, x, y,
   if (nlevels(dat[[x]]) < 2)
     stop("Fewer than 2 levels of ", x, " remain after screening.")
  
-  # cross-tab against the covariate, for the record
-  cells <- if (!is.null(covariate) && covariate %in% names(dat))
-    table(dat[[x]], dat[[covariate]]) else NULL
- 
-  # ---- 2. interaction with the covariate (diagnostic) -----------
-  # Fitted on ONE dataset with complete cases on all three variables,
-  # so the two models in the LRT are genuinely nested. Fitting them to
-  # different subsets is a common and silent error.
-  int_test <- NULL; fit_int <- NULL
-  if (!is.null(covariate) && covariate %in% names(dat)) {
-    dat_int <- dat %>% dplyr::filter(!is.na(.data[[covariate]])) %>% droplevels()
- 
-    f_int <- stats::as.formula(sprintf("%s ~ %s * %s", y, x, covariate))
-    f_add <- stats::as.formula(sprintf("%s ~ %s + %s", y, x, covariate))
- 
-    fit_int <- try(ordinal::clm(f_int, data = dat_int, link = link), silent = TRUE)
-    fit_add <- try(ordinal::clm(f_add, data = dat_int, link = link), silent = TRUE)
- 
-    if (.clm_ok(fit_int) && .clm_ok(fit_add)) {
-      int_test <- anova(fit_add, fit_int)
-    } else {
-      warning("Interaction model did not converge; interaction not tested. ",
-              "Usually sparse cells in the three-way cross-classification. ",
-              "See $cells.", call. = FALSE)
-      fit_int <- NULL
-    }
-  }
- 
-  # ---- 3. final model: x alone, pooled over the covariate -------
-  # Uses the larger dataset (covariate NAs allowed) to maximise n.
+  # ---- 2. model: y as a function of x ---------------------------------------
   fit <- ordinal::clm(stats::as.formula(sprintf("%s ~ %s", y, x)),
                       data = dat, link = link)
  
@@ -322,19 +418,13 @@ fit_ordinal_by <- function(data, x, y,
             "check table(dat[[y]]) and collapse it, or refit with brms.",
             call. = FALSE)
  
-  # assumption checks. nominal_test() does not support the probit link,
-  # so the partial-PO model is fitted explicitly and compared.
-  scale_chk <- try(ordinal::scale_test(fit), silent = TRUE)
-  po_chk <- try(
-    anova(fit, ordinal::clm(stats::as.formula(sprintf("%s ~ 1", y)),
-                            nominal = stats::as.formula(paste("~", x)),
-                            data = dat, link = link)),
-    silent = TRUE)
- 
+  # proportional-odds and scale checks, with their own convergence codes
+  assump <- .assumption_checks(fit, dat, x = x, y = y, link = link)
+
   lrt <- drop1(fit, test = "Chisq")
  
-  # latent-scale contrasts: differences in latent SD units, so they read
-  # like a Cohen's d. The CI matters more than the p-value - it says how
+  # latent-scale contrasts: differences in latent residual SD units, so they
+  # read as Cohen's d-like effects (Gambarota & Altoe 2024). The CI matters more than the p-value - it says how
   # large an effect can still be ruled out.
   emm_link  <- emmeans::emmeans(fit, stats::as.formula(paste("~", x)),
                                 mode = "linear.predictor")
@@ -342,9 +432,6 @@ fit_ordinal_by <- function(data, x, y,
  
   if (verbose) {
     print(summary(fit)); print(lrt)
-    if (!is.null(int_test)) {
-      cat("\ninteraction with ", covariate, ":\n", sep = ""); print(int_test)
-    }
     cat("\nlatent-scale contrasts:\n"); print(contrasts)
   }
  
@@ -375,18 +462,18 @@ fit_ordinal_by <- function(data, x, y,
     ggplot2::scale_y_continuous(
       labels = scales::percent,
       expand = ggplot2::expansion(mult = c(.05, .12))) +
-    ggplot2::scale_x_discrete(labels = scales::label_wrap(wrap_axis)) +
-    ggplot2::labs(x = NULL, y = "P(category)",
+    ggplot2::scale_x_discrete(
+      labels = function(z) scales::label_wrap(wrap_axis)(fig_label(z))) +
+    ggplot2::labs(x = fig_var(x), y = "P(category)",
                   caption = "grey = observed; red = model estimate") +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
  
   structure(list(
     x = x, y = y, n = nrow(dat), K_x = nlevels(dat[[x]]),
-    dropped = small, level_n = lvl_n, cells = cells,
-    data = dat, fit = fit, fit_int = fit_int,
-    int_test = int_test, lrt = lrt,
-    scale_test = scale_chk, po_test = po_chk,
+    dropped = small, level_n = lvl_n,
+    data = dat, fit = fit, lrt = lrt,
+    scale_test = assump$test_scale, po_test = assump$test_po, assump = assump,
     emm = emm, raw = raw, contrasts = contrasts, plot = p
   ), class = "ordinal_by")
 }
@@ -399,16 +486,8 @@ print.ordinal_by <- function(z, ...) {
     cat("dropped:", paste(z$dropped[[z$x]], collapse = ", "), "\n")
  
   p <- z$lrt[["Pr(>Chi)"]][2]
-  cat(sprintf("main effect   LRT chi2 = %.2f, df = %d, p = %s\n",
-              z$lrt[["LRT"]][2], z$lrt[["Df"]][2],
-              if (p < .001) "< .001" else sprintf("%.3f", p)))
- 
-  if (!is.null(z$int_test)) {
-    pi <- z$int_test[["Pr(>Chisq)"]][2]
-    cat(sprintf("x covariate   LRT chi2 = %.2f, df = %d, p = %s\n",
-                z$int_test[["LR.stat"]][2], z$int_test[["df"]][2],
-                if (pi < .001) "< .001" else sprintf("%.3f", pi)))
-  }
+  cat(sprintf("main effect   LRT chi2 = %.2f, df = %d, p %s\n",
+              z$lrt[["LRT"]][2], z$lrt[["Df"]][2], fmt_p(p)))
  
   cat("\nlatent-scale contrasts (probit SD units):\n")
   print(as.data.frame(z$contrasts), row.names = FALSE, digits = 2)
@@ -421,9 +500,23 @@ print.ordinal_by <- function(z, ...) {
 # fit_ordinal_by_continuous(): ordinal outcome ~ CONTINUOUS predictor
 #
 #   1. screens for sample size and predictor variability
-#   2. checks linearity on the latent scale (linear vs natural spline)
-#   3. reports the predictor x covariate interaction (diagnostic only)
-#   4. fits the final model on x alone, pooled over the covariate
+#   2. fits the slope model on x alone (all respondents)
+#   3. tests the EQUAL-SPACING assumption the slope makes: on one dataset
+#      with sparse x values (n < min_n_level) dropped, a linear model and
+#      a factor model are fitted and compared with anova(slope, factor).
+#      The linear model is the factor model with the gaps between adjacent
+#      x values constrained to be equal, so the two are nested and the LRT
+#      (df = K - 2) tests exactly that constraint.
+#   4. if the factor model is significantly better, the figure ($plot)
+#      comes from the factor model (sparse levels dropped) and
+#      $model_used = "factor"; the slope results are still returned.
+#
+# POWER: the equal-spacing test has LITTLE power here. Several x values
+# hold only 20-40 respondents, and the test spends K - 2 df on the
+# departures, so a non-significant result (p = .2-.9 in this survey) is
+# weak evidence that spacing is equal - only that a large departure is
+# unlikely. Treat it as a diagnostic, and read the figure's bars against
+# the fitted curve as well.
 #
 # The model is a single continuous slope, but predictions are evaluated
 # at the values of x that actually occur, so the figure matches the one
@@ -436,12 +529,8 @@ print.ordinal_by <- function(z, ...) {
 # reported per decade) rather than standardising - the SD of a predictor
 # is a property of the sample, not of the quantity.
 # =================================================================
-# try(fit_ordinal_by_continuous(dat, x = demo$var, y = ord$y,
-#                                   covariate = cov, min_distinct_x = 3,
-#                                   verbose = verbose), silent = TRUE)
 
 fit_ordinal_by_continuous <- function(data, x, y,
-                                      covariate       = "career_stage",
                                       link            = "probit",
                                       min_n           = 20,
                                       min_distinct_x  = 6,
@@ -457,8 +546,19 @@ fit_ordinal_by_continuous <- function(data, x, y,
                                       n_grid          = 100,
                                       # the fitted line is drawn SOLID when
                                       # the LRT for x is below this and
-                                      # DOTTED when it is not
+                                      # DOTTED when it is not. Also the
+                                      # level for the equal-spacing test.
                                       sig_level       = 0.05,
+                                      # ---- equal-spacing test ------------
+                                      # x values with fewer respondents than
+                                      # this are dropped from BOTH models in
+                                      # the spacing test (and from the factor
+                                      # figure), never from the slope model
+                                      min_n_level     = 20,
+                                      # above this many distinct x values a
+                                      # factor model is not sensible (x is
+                                      # genuinely continuous); not tested
+                                      spacing_max_levels = 10,
                                       # ------------------------------------
                                       verbose         = TRUE) {
 
@@ -519,38 +619,15 @@ fit_ordinal_by_continuous <- function(data, x, y,
          "factor coding instead, or lower min_distinct_x deliberately.")
 
   # NOTE on linearity. The cumulative model assumes x shifts the latent
-  # variable LINEARLY. That assumption is no longer TESTED here: a spline
-  # comparison needs more distinct x values, and more respondents per
-  # value, than this survey provides, and a test that is underpowered by
-  # construction is worse than no test, because a non-significant result
-  # gets read as evidence FOR linearity. It is assessed graphically
-  # instead - the fitted curve is drawn over the observed proportions
-  # below, so systematic departure is visible. Report it that way:
-  # "linearity on the latent scale was assessed graphically", not tested.
+  # variable LINEARLY. For a predictor with a handful of discrete values
+  # that is the same as assuming EQUAL SPACING between adjacent values,
+  # which is tested in step 3 against a factor model. (A spline test was
+  # dropped earlier: it needs more distinct x values than this survey
+  # has.) A non-significant spacing test is not proof of linearity - with
+  # small groups it has little power - so the fitted curve is still drawn
+  # over the observed proportions for a visual check.
 
-  # ---- 2. interaction with the covariate (diagnostic) ------------
-  int_test <- NULL; fit_int <- NULL
-  if (!is.null(covariate) && covariate %in% names(dat)) {
-    dat_int <- dat %>%
-      dplyr::filter(!is.na(.data[[covariate]])) %>% droplevels()
-
-    f_int <- stats::as.formula(sprintf("%s ~ %s * %s", y, x, covariate))
-    f_add <- stats::as.formula(sprintf("%s ~ %s + %s", y, x, covariate))
-
-    fit_int <- try(ordinal::clm(f_int, data = dat_int, link = link), silent = TRUE)
-    fit_add <- try(ordinal::clm(f_add, data = dat_int, link = link), silent = TRUE)
-
-    if (.clm_ok(fit_int) && .clm_ok(fit_add)) {
-      int_test <- anova(fit_add, fit_int)
-    } else {
-      warning("Interaction model did not converge; interaction not tested. ",
-              "Usually sparse cells in the three-way cross-classification.",
-              call. = FALSE)
-      fit_int <- NULL
-    }
-  }
-
-  # ---- 3. final model: x alone, pooled over the covariate --------
+  # ---- 2. model: x alone ----------------------------------------
   fit <- ordinal::clm(stats::as.formula(sprintf("%s ~ %s", y, x)),
                       data = dat, link = link)
 
@@ -562,12 +639,8 @@ fit_ordinal_by_continuous <- function(data, x, y,
             "check table(dat[[y]]) and collapse it, or refit with brms.",
             call. = FALSE)
 
-  scale_chk <- try(ordinal::scale_test(fit), silent = TRUE)
-  po_chk <- try(
-    anova(fit, ordinal::clm(stats::as.formula(sprintf("%s ~ 1", y)),
-                            nominal = stats::as.formula(paste("~", x)),
-                            data = dat, link = link)),
-    silent = TRUE)
+  # proportional-odds and scale checks, with their own convergence codes
+  assump <- .assumption_checks(fit, dat, x = x, y = y, link = link)
 
   lrt <- drop1(fit, test = "Chisq")
 
@@ -584,13 +657,95 @@ fit_ordinal_by_continuous <- function(data, x, y,
                                               type = "prob")),
     silent = TRUE)
 
+  # ---- 3. equal-spacing test: anova(slope, factor) on ONE dataset ----
+  # Sparse x values are dropped first, so the factor model is not
+  # estimating a level from a handful of people. The linear model is
+  # refitted on that SAME reduced dataset purely for this test - the
+  # headline slope above keeps every respondent.
+  spacing <- list(tested = FALSE, test = NULL, p = NA_real_, df = NA_integer_,
+                  violated = FALSE, n = NA_integer_, dropped = NULL,
+                  fit_linear = NULL, fit_factor = NULL, reason = NA_character_)
+
+  x_n     <- dat %>% dplyr::count(.data[[x]], name = "n")
+  small_x <- dplyr::filter(x_n, n < min_n_level)
+  dat_sp  <- dplyr::filter(dat, !.data[[x]] %in% small_x[[x]])
+  k_sp    <- dplyr::n_distinct(dat_sp[[x]])
+
+  # dropped levels reported by their original labels when x was coerced
+  lab_of <- function(v) if (is.null(x_labels)) as.character(v)
+                        else unname(x_labels[as.character(v)])
+  spacing$dropped <- tibble::tibble(level = lab_of(small_x[[x]]),
+                                    n     = small_x$n)
+
+  if (n_distinct_x > spacing_max_levels) {
+    spacing$reason <- sprintf("not tested: %d distinct values > spacing_max_levels",
+                              n_distinct_x)
+  } else if (k_sp < 3) {
+    # with 2 values a line and a factor are the same model (df = 0)
+    spacing$reason <- sprintf(
+      "not tested: only %d value(s) of %s with n >= %d", k_sp, x, min_n_level)
+  } else {
+    lv_x <- sort(unique(dat_sp[[x]]))
+    dat_sp$.x_fac <- factor(dat_sp[[x]], levels = lv_x, labels = lab_of(lv_x))
+
+    fit_lin_sp <- try(ordinal::clm(stats::as.formula(sprintf("%s ~ %s", y, x)),
+                                   data = dat_sp, link = link), silent = TRUE)
+    fit_fac_sp <- try(ordinal::clm(stats::as.formula(sprintf("%s ~ .x_fac", y)),
+                                   data = dat_sp, link = link), silent = TRUE)
+
+    if (.clm_usable(fit_lin_sp) && .clm_usable(fit_fac_sp)) {
+      tst  <- anova(fit_lin_sp, fit_fac_sp)
+      p_sp <- tst[["Pr(>Chisq)"]][2]
+      spacing <- utils::modifyList(spacing, list(
+        tested = TRUE, test = tst, p = p_sp, df = as.integer(tst$df[2]),
+        violated = !is.na(p_sp) && p_sp < sig_level, n = nrow(dat_sp),
+        fit_linear = fit_lin_sp, fit_factor = fit_fac_sp))
+    } else {
+      spacing$reason <- "not tested: linear or factor model did not converge"
+      warning("Equal-spacing test for ", x, " not run: a model did not ",
+              "converge.", call. = FALSE)
+    }
+  }
+
+  # ---- 4. if equal spacing is rejected, use the factor model ----------
+  # Same reduced dataset as the test, x as a factor carrying the original
+  # labels. fit_ordinal_by() supplies the categorical fit, contrasts and
+  # figure; its own min_n screen has nothing left to drop.
+  factor_fit <- NULL
+  if (spacing$violated) {
+    dat_f <- dat_sp
+    dat_f[[x]] <- dat_f$.x_fac
+    dat_f$.x_fac <- NULL
+    factor_fit <- try(fit_ordinal_by(dat_f, x = x, y = y,
+                                     min_n = min_n_level, link = link,
+                                     wrap_axis = wrap_axis,
+                                     wrap_facet = wrap_facet,
+                                     verbose = FALSE), silent = TRUE)
+    if (inherits(factor_fit, "try-error")) {
+      warning("Equal spacing rejected for ", x, " but the factor model ",
+              "failed; falling back to the slope figure. ",
+              conditionMessage(attr(factor_fit, "condition")), call. = FALSE)
+      factor_fit <- NULL
+    }
+  }
+  model_used <- if (is.null(factor_fit)) "slope" else "factor"
+
+  spacing_txt <- if (spacing$tested)
+    sprintf("equal spacing: LRT slope vs factor chi2 = %.2f, df = %d, p %s%s",
+            spacing$test[["LR.stat"]][2], spacing$df, fmt_p(spacing$p),
+            if (nrow(spacing$dropped))
+              sprintf(" (n < %d dropped: %s)", min_n_level,
+                      paste(spacing$dropped$level, collapse = ", "))
+            else "")
+  else paste("equal spacing:", spacing$reason)
+
   if (verbose) {
     print(summary(fit)); print(lrt)
     cat(sprintf("\nslope: %.3f [%.3f, %.3f] probit SD per unit of %s\n",
                 slope$estimate, slope$conf.low, slope$conf.high, x))
-    if (!is.null(int_test)) {
-      cat("\ninteraction with ", covariate, ":\n", sep = ""); print(int_test)
-    }
+    cat(spacing_txt, "\n")
+    if (model_used == "factor")
+      cat("-> factor model is significantly better; figure uses the factor model\n")
   }
 
   # ---- predicted probabilities at the observed values of x -------
@@ -698,33 +853,49 @@ fit_ordinal_by_continuous <- function(data, x, y,
       labels = scales::percent,
       expand = ggplot2::expansion(mult = c(.05, .12))) +
     ggplot2::labs(
-      x = x, y = "P(category)",
+      x = fig_var(x), y = "P(category)",
+      # p-values and the equal-spacing test are reported in the summary
+      # table, not in the figure
       caption = sprintf(
         paste("grey = observed; red points = model estimate at the",
               "observed values of %s\nfitted line: solid if p < %s,",
-              "dotted otherwise (here p = %s)"),
-        x, format(sig_level),
-        if (is.na(p_x)) "NA"
-        else if (p_x < .001) "< .001"
-        else sprintf("%.3f", p_x))) +
+              "dotted otherwise"),
+        fig_var(x, FALSE), sub("^0", "", format(sig_level)))) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
   # put the original factor labels back on the axis when x was coerced
   if (discrete_axis && !is.null(x_labels))
     p <- p + ggplot2::scale_x_discrete(
-      labels = scales::label_wrap(wrap_axis)(x_labels[as.character(x_val)]))
+      labels = scales::label_wrap(wrap_axis)(
+        fig_label(x_labels[as.character(x_val)])))
+
+  # the figure that gets saved: the factor model's when equal spacing was
+  # rejected, otherwise the slope figure. Both are returned.
+  plot_out <- if (model_used == "factor")
+    factor_fit$plot +
+      ggplot2::labs(
+        x = fig_var(x),
+        caption = sprintf(
+          paste("grey = observed; red = FACTOR-model estimate",
+                "(equal spacing rejected, so %s is treated as categorical;",
+                "see the summary table)"),
+          fig_var(x, FALSE)))
+  else p
 
   structure(list(
     x = x, y = y, n = nrow(dat), n_distinct_x = n_distinct_x,
     x_labels = x_labels,
-    data = dat, fit = fit, fit_int = fit_int,
+    data = dat, fit = fit,
     slope = slope, ame = ame, lrt = lrt,
     # what the figure's line style was based on, so it can be reported
     p_x = p_x, x_sig = x_sig, line_type = line_type, sig_level = sig_level,
-    int_test = int_test,
-    scale_test = scale_chk, po_test = po_chk,
-    emm = emm, emm_line = emm_line, raw = raw, plot = p
+    scale_test = assump$test_scale, po_test = assump$test_po, assump = assump,
+    # equal-spacing test and, when it was rejected, the factor model
+    spacing = spacing, model_used = model_used, factor_fit = factor_fit,
+    discrete_axis = discrete_axis,
+    emm = emm, emm_line = emm_line, raw = raw,
+    plot = plot_out, plot_slope = p
   ), class = "ordinal_by_cont")
 }
 
@@ -739,27 +910,22 @@ print.ordinal_by_cont <- function(z, ...) {
               s$estimate, s$conf.low, s$conf.high, z$x))
 
   p <- z$lrt[["Pr(>Chi)"]][2]
-  cat(sprintf("        LRT chi2 = %.2f, df = %d, p = %s\n",
-              z$lrt[["LRT"]][2], z$lrt[["Df"]][2],
-              if (p < .001) "< .001" else sprintf("%.3f", p)))
+  cat(sprintf("        LRT chi2 = %.2f, df = %d, p %s\n",
+              z$lrt[["LRT"]][2], z$lrt[["Df"]][2], fmt_p(p)))
 
-  fmt <- function(tst, lab, pcol = "Pr(>Chisq)") {
-    if (is.null(tst)) {
-      cat(sprintf("%-16s not tested\n", lab)); return(invisible())
-    }
-    pv <- tst[[pcol]][2]
-    cat(sprintf("%-16s p = %s%s\n", lab,
-                if (pv < .001) "< .001" else sprintf("%.3f", pv),
-                if (pv < .05) "   <- flagged" else ""))
+  cat("\n")
+  sp <- z$spacing
+  if (sp$tested) {
+    cat(sprintf("equal spacing   LRT slope vs factor chi2 = %.2f, df = %d, p %s (n = %d)\n",
+                sp$test[["LR.stat"]][2], sp$df, fmt_p(sp$p), sp$n))
+    if (nrow(sp$dropped))
+      cat("                dropped for the test:",
+          paste(sprintf("%s (n = %d)", sp$dropped$level, sp$dropped$n),
+                collapse = ", "), "\n")
+  } else {
+    cat("equal spacing  ", sp$reason, "\n")
   }
-
-  cat("\n")
-  fmt(z$int_test, "x covariate")
-  # said explicitly rather than omitted, so a reader of the console output
-  # does not assume linearity was checked and passed
-  cat(sprintf("%-16s assessed graphically (see $plot), not tested\n",
-              "linearity"))
-  cat("\n")
+  cat("model used for figure:", z$model_used, "\n\n")
 
   invisible(z)
 }
@@ -775,9 +941,7 @@ print.ordinal_by_cont <- function(z, ...) {
 # unidimensionality is not assumed and IRT quantities are not reported.
 
 # ---- expand to long, filling in the implicit "No" ----------------
-expand_select_all <- function(survey, q, id_col = "response_id",
-                              keep_na_x = FALSE, x = NULL,
-                              all_respondents = FALSE) {
+expand_select_all <- function(survey, q, id_col = "response_id", x = NULL) {
 
   svy <- survey %>% dplyr::rename(ResponseId = dplyr::all_of(id_col))
 
@@ -789,11 +953,10 @@ expand_select_all <- function(survey, q, id_col = "response_id",
 
   if (nrow(yes) == 0) stop("prep_select_all() returned no rows for q = ", q)
 
-  # Respondent universe. all_respondents = TRUE includes people who
-  # selected nothing (their row of zeros is real data); FALSE restricts
-  # to people who ticked at least one box, which is appropriate here
-  # because every question offered a "none of the above" option.
-  ids <- if (all_respondents) unique(svy$ResponseId) else unique(yes$ResponseId)
+  # Respondent universe: people who ticked at least one box. Appropriate
+  # here because every question offered a "none of the above" option, so
+  # someone who selected nothing skipped the question.
+  ids <- unique(yes$ResponseId)
 
   no <- tidyr::expand_grid(
       ResponseId = ids,
@@ -809,7 +972,7 @@ expand_select_all <- function(survey, q, id_col = "response_id",
       question         = factor(make.names(question_label)),  # model-safe name
       response_numeric = as.integer(response == "Yes"))
 
-  if (!is.null(x) && !keep_na_x)
+  if (!is.null(x))
     out <- out %>% dplyr::filter(!is.na(.data[[x]])) %>% droplevels()
 
   out
@@ -823,37 +986,12 @@ expand_select_all <- function(survey, q, id_col = "response_id",
 # than reverse-coded, and respondents whose answers contradict it are
 # removed. See https://doi.org/10.1111/j.0006-341X.2004.00147.x
 # on why the assumptoin of independence is wrong so need more complicated models.
-clean_select_all <- function(long, q, none_pattern,
-                             text_col  = NULL,
-                             none_text = character(0),
-                             some_text = character(0),
-                             quiet = FALSE) {
+clean_select_all <- function(long, q, none_pattern, quiet = FALSE) {
 
   none_rows <- long %>%
     dplyr::filter(grepl(none_pattern, .data[[q]]), response == "Yes")
 
   long <- long %>% dplyr::filter(!grepl(none_pattern, .data[[q]]))
-
-  # free-text "Other" answers that actually mean "none"
-  if (!is.null(text_col) && length(none_text)) {
-    ids <- long %>%
-      dplyr::filter(.data[[text_col]] %in% none_text) %>%
-      dplyr::distinct(ResponseId) %>% dplyr::pull(ResponseId)
-    long <- long %>%
-      dplyr::mutate(
-        response = ifelse(.data[[q]] == "Other" & ResponseId %in% ids,
-                          "No", response),
-        response_numeric = ifelse(.data[[q]] == "Other" & ResponseId %in% ids,
-                                  0L, response_numeric))
-  }
-
-  # free-text answers that actually mean "some" (so not a real conflict)
-  if (!is.null(text_col) && length(some_text)) {
-    ids <- long %>%
-      dplyr::filter(.data[[text_col]] %in% some_text) %>%
-      dplyr::distinct(ResponseId) %>% dplyr::pull(ResponseId)
-    none_rows <- none_rows %>% dplyr::filter(!ResponseId %in% ids)
-  }
 
   yes_ids   <- long %>% dplyr::filter(response == "Yes") %>% dplyr::pull(ResponseId)
   conflicts <- unique(none_rows$ResponseId[none_rows$ResponseId %in% yes_ids])
@@ -870,13 +1008,221 @@ clean_select_all <- function(long, q, none_pattern,
 }
 
 
+# ---- omnibus test on total endorsements per person ----------------
+# Collapses the item-level data to counts: "how many boxes did you tick,
+# out of those offered?" rather than "which ones". A sum of Bernoullis
+# sharing one probability IS a Binomial, so this is the same likelihood
+# as the item-level model minus any item-specific term. cbind(k, n - k)
+# supplies the correct denominator when types hold different numbers of
+# items - a raw count would make the larger type look higher by default.
+# For a continuous x the term is a slope.
+#
+# `adj` (a person-level column, e.g. centred career stage) is added as a
+# covariate for the sensitivity fits; with q_type it is allowed its own
+# effect per type (adj * q_type), mirroring question * adj item-level.
+.omnibus_counts <- function(data, x, id, q_type = NULL, adj = NULL,
+                            quiet = FALSE) {
+
+  cnt <- data %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(id, x, adj, q_type)))) %>%
+    dplyr::summarise(k = sum(response_numeric), n = dplyr::n(),
+                     .groups = "drop")
+
+  if (is.null(q_type)) {
+
+    rhs <- paste(c(x, adj), collapse = " + ")
+
+    # one row per person, so no clustering remains and a plain glm is right
+    m_o <- stats::glm(stats::as.formula(sprintf("cbind(k, n - k) ~ %s", rhs)),
+                      family = binomial, data = cnt)
+
+    # person-level heterogeneity still makes counts overdispersed relative
+    # to binomial, which would make the SEs too small
+    disp <- sum(stats::residuals(m_o, type = "pearson")^2) /
+            stats::df.residual(m_o)
+
+    omni <- list(kind = "binomial_glm", x = x, adj = adj, counts = cnt,
+                 fit = m_o, test = drop1(m_o, test = "Chisq"),
+                 dispersion = disp)
+
+    if (disp > 1.5) {
+      if (!quiet)
+        warning("Omnibus counts are overdispersed (dispersion = ",
+                round(disp, 2), "); the quasibinomial test is the one to ",
+                "report. See $omni$test_quasi.", call. = FALSE)
+      m_q <- stats::update(m_o, family = stats::quasibinomial)
+      omni$fit_quasi  <- m_q
+      omni$test_quasi <- drop1(m_q, test = "F")
+    }
+    return(omni)
+  }
+
+  a <- if (is.null(adj)) "" else sprintf(" + %s * %s", adj, q_type)
+  f_type <- stats::as.formula(sprintf("cbind(k, n - k) ~ %s%s", q_type, a))
+  f_add  <- stats::as.formula(sprintf("cbind(k, n - k) ~ %s + %s%s", x, q_type, a))
+  f_int  <- stats::as.formula(sprintf("cbind(k, n - k) ~ %s * %s%s", x, q_type, a))
+
+  m_type <- stats::glm(f_type, family = binomial, data = cnt)
+  m_add  <- stats::glm(f_add,  family = binomial, data = cnt)
+  m_int  <- stats::glm(f_int,  family = binomial, data = cnt)
+
+  # Each person contributes one row per type, so the rows are clustered.
+  # Cluster-robust SEs make no assumption about the within-person
+  # correlation structure and always converge, unlike the GLMM. They
+  # also absorb the overdispersion from person heterogeneity.
+  # NOTE: likelihood ratio tests are NOT valid under a robust vcov, so
+  # the omnibus tests here are Wald tests.
+  V_int <- sandwich::vcovCL(m_int, cluster = cnt[[id]])
+  V_add <- sandwich::vcovCL(m_add, cluster = cnt[[id]])
+
+  list(
+    kind    = "clustered_glm", x = x, adj = adj,
+    counts  = cnt, fit = m_int, fit_add = m_add, vcov = V_int,
+    coefs   = lmtest::coeftest(m_int, vcov. = V_int),
+    test_x  = lmtest::waldtest(m_type, m_add, vcov = V_add, test = "Chisq"),
+    test    = lmtest::waldtest(m_add,  m_int, vcov = V_int, test = "Chisq"))
+}
+
+# p-values out of an .omnibus_counts() result:
+#   p_total    does total endorsement differ with x?
+#   p_valence  (q_type only) does the positive/negative balance shift?
+# The quasibinomial test reports an F column, the binomial a Chisq one,
+# so the p column is found by prefix; the row is found by NAME, since an
+# adjusted fit has more than one term.
+.omni_p <- function(o) {
+  if (is.null(o)) return(list(p_total = NA_real_, p_valence = NA_real_))
+  if (o$kind == "binomial_glm") {
+    tst <- if (is.null(o$test_quasi)) o$test else o$test_quasi
+    list(p_total   = tst[o$x, grep("^Pr", names(tst))[1]],
+         p_valence = NA_real_)
+  } else {
+    list(p_total   = o$test_x[["Pr(>Chisq)"]][2],
+         p_valence = o$test[["Pr(>Chisq)"]][2])
+  }
+}
+
+# glmer convergence / singularity as one string; "" when clean
+.glmer_flag <- function(m) {
+  if (inherits(m, "try-error") || is.null(m)) return("failed")
+  msg <- m@optinfo$conv$lme4$messages
+  paste(c(if (lme4::isSingular(m)) "singular", msg), collapse = "; ")
+}
+
+
+# ---- shared select-all caption text --------------------------------
+sa_dagger_note <- paste0(
+  "\n† specific examples removed from the panel title here; ",
+  "see the figure caption for the full wording")
+
+sa_cap_model <- function(pred_re_form) {
+  if (is.null(pred_re_form))
+    "red = model estimate (population average)"
+  # The typical-respondent estimate is a valid quantity, but it is NOT the
+  # same scale as the bars: averaging over people pulls the observed
+  # proportions TOWARDS 50%, so the red points sit further from 50% than
+  # the bars by construction, and gaps between groups look larger than in
+  # the raw data. Kept out of the caption for space; state it in the
+  # methods / figure legends of the paper.
+  else if (length(pred_re_form) == 1 && is.na(pred_re_form))
+    "red = model estimate for a typical respondent (random effect = 0)"
+  else
+    "red = model estimate"
+}
+
+
+# ---- figure for an ordered / continuous x ---------------------------
+# Draws from a fit_select_all() result without touching the model, so
+# run_select_all() can redraw cached fits when the styling changes.
+# Line style: solid if the item's slope has p < .05 (FDR across the items of
+# this figure), dotted otherwise. The slopes, as odds ratios, are in $trends.
+plot_select_all_ordered <- function(res,
+                                    wrap_facet = 38, facet_max_lines = 2,
+                                    strip_size = 12, wrap_axis = 20) {
+  x        <- res$x
+  x_labels <- res$x_labels
+  lab_map  <- res$labels
+  raw      <- res$raw
+
+  # no slope available (emtrends failed): solid, so nothing reads as null
+  emm_line <- res$emm_line
+  p_item   <- if (is.null(res$trends)) rep(NA_real_, nrow(emm_line)) else
+    res$trends$p.value[match(as.character(emm_line$question),
+                             as.character(res$trends$question))]
+  emm_line$.line <- ifelse(is.na(p_item) | p_item < .05, "solid", "dotted")
+
+  # bar width from the tightest gap between observed values, so bars
+  # neither overlap nor leave the axis looking empty
+  ux <- sort(unique(res$data[[x]]))
+  bw <- if (length(ux) > 1) 0.7 * min(diff(ux)) else 0.7
+
+  # smallest wrap width >= wrap_facet at which every title fits in
+  # facet_max_lines lines (label_wrap() and strwrap() break the same way)
+  facet_w <- max(wrap_facet, vapply(lab_map, function(s) {
+    w <- wrap_facet
+    while (length(strwrap(s, w)) > facet_max_lines) w <- w + 1
+    w
+  }, numeric(1)))
+
+  # Axis: a coerced ordered factor keeps its original level text at the
+  # positions it was scored to; a genuinely numeric x gets pretty breaks.
+  x_scale <- if (!is.null(x_labels))
+    ggplot2::scale_x_continuous(
+      breaks       = as.numeric(names(x_labels)),
+      labels       = scales::label_wrap(wrap_axis)(fig_label(unname(x_labels))),
+      minor_breaks = NULL)
+  else
+    ggplot2::scale_x_continuous(breaks = scales::breaks_pretty(5))
+
+  p <- ggplot2::ggplot(emm_line, ggplot2::aes(.data[[x]], prob)) +
+    ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
+                      fill = "grey85", width = bw) +
+    # a ribbon + line rather than pointranges: the model is a smooth
+    # function of x, and drawing it as isolated points would hide that.
+    # Drawn from the fine grid, so it is the model's actual curve rather
+    # than straight segments between the observed values.
+    ggplot2::geom_ribbon(
+      ggplot2::aes(ymin = asymp.LCL, ymax = asymp.UCL),
+      fill = "firebrick", alpha = .18) +
+    ggplot2::geom_line(ggplot2::aes(linetype = .line),
+                       colour = "firebrick", linewidth = .6) +
+    ggplot2::scale_linetype_identity()
+
+  # model estimate at each observed value, to read against its bar
+  if (res$pred_at_observed)
+    p <- p + ggplot2::geom_point(data = res$emm, colour = "firebrick", size = 1.4)
+
+  p <- p +
+    ggplot2::geom_text(data = raw, ggplot2::aes(y = Inf, label = n),
+                       vjust = 1.4, size = 2.6, colour = "grey40") +
+    ggplot2::facet_wrap(
+      ~ question,
+      labeller = ggplot2::labeller(
+        question = function(z) scales::label_wrap(facet_w)(lab_map[z]))) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent,
+      expand = ggplot2::expansion(mult = c(.05, .12))) +
+    # continuous, NOT scale_x_discrete
+    x_scale +
+    ggplot2::labs(x = fig_var(x), y = "P(yes)",
+                  caption = paste0(
+                    "grey = observed; ", sa_cap_model(res$pred_re_form),
+                    "\nsolid line = item's slope p < .05 (FDR across items); ",
+                    "dotted = p >= .05",
+                    if (any(grepl("†", lab_map))) sa_dagger_note)) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(size = strip_size, lineheight = .9,
+                                         margin = ggplot2::margin(b = 4)))
+
+  # level text is usually long; angle it like the categorical figure
+  if (!is.null(x_labels))
+    p <- p + ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+  p
+}
+
+
 # ---- GLMM + summaries + plot -------------------------------------
-#fit_select_all(data = reason_long_career, x = "career_stage",
-                       #    q_type = "q_type", re_structure = "correlated")
-
-
-# fit_select_all(long, x = x, re.form = re_forms[[nm]], ...), f)
-
 fit_select_all <- function(data, x, id = "ResponseId",
                            q_type = NULL,          # column grouping questions
                            re_structure = NULL,
@@ -903,7 +1249,17 @@ fit_select_all <- function(data, x, id = "ResponseId",
                            n_grid_avg = 30,
                            # ------------------------------------------------
 
-                           wrap_facet = 25, wrap_axis = 20,
+                           # panel titles: wrapped at wrap_facet characters,
+                           # widened just enough that no title needs more
+                           # than facet_max_lines lines; strip_size in pt.
+                           # 38 characters at 12 pt fills a panel of a
+                           # 4-column figure saved at 18 x 14 in, scale 0.8.
+                           wrap_facet = 38, facet_max_lines = 2,
+                           strip_size = 12,
+                           # replace "(e.g. ...)" in panel titles with a dagger and
+                           # say so in the caption, to keep titles short
+                           strip_examples = TRUE,
+                           wrap_axis = 20,
                            order_facets = TRUE,
                            # ignored when x is continuous: a compact letter
                            # display compares groups, and a covariate has
@@ -917,6 +1273,13 @@ fit_select_all <- function(data, x, id = "ResponseId",
                            # family per question.
                            seed_mvt = 12345,
                            re.form  = NULL,
+                           # equal-spacing diagnostic for a continuous x:
+                           # x values with fewer respondents than
+                           # spacing_min_n are dropped from both models of
+                           # the test; not run above spacing_max_levels
+                           spacing_test       = TRUE,
+                           spacing_min_n      = 20,
+                           spacing_max_levels = 10,
                            verbose  = TRUE) {
 
   stopifnot(all(c("question", "response_numeric", x, id) %in% names(data)))
@@ -1082,7 +1445,6 @@ fit_select_all <- function(data, x, id = "ResponseId",
 
     switch(re_structure,
            nested       = sprintf("(1 | %s) + (1 | %s:%s)", id, id, q_type),
-           by_type      = sprintf("(1 | %s:%s)", id, q_type),
            correlated   = sprintf("(0 + %s | %s)",  q_type, id),
            uncorrelated = sprintf("(0 + %s || %s)", q_type, id),
            #switch() returns
@@ -1102,73 +1464,75 @@ fit_select_all <- function(data, x, id = "ResponseId",
   chisq_test <- drop1(fit, test = "Chisq")
 
   # ---- omnibus test on total endorsements per person -------------
-  # Collapses the item-level data to counts: "how many boxes did you tick,
-  # out of those offered?" rather than "which ones". A sum of Bernoullis
-  # sharing one probability IS a Binomial, so this is the same likelihood
-  # as the item-level model minus any item-specific term. cbind(k, n - k)
-  # supplies the correct denominator when types hold different numbers of
-  # items - a raw count would make the larger type look higher by default.
-  # For a continuous x: the term is then a slope.
-  omni <- NULL
+  # see .omnibus_counts() for the model and why
+  omni <- .omnibus_counts(data, x = x, id = id, q_type = q_type)
 
-  if (is.null(q_type)) {
+  # ---- equal-spacing diagnostic (continuous x only) --------------
+  # A coerced ordered factor is scored 1..K, which ASSUMES equal spacing
+  # between adjacent levels. As in fit_ordinal_by_continuous(): on one
+  # dataset with sparse x values (< spacing_min_n respondents) dropped,
+  # the item-level slope model (question * x) is compared with the factor
+  # model (question * factor(x)) by LRT; df = n_items * (K - 2).
+  # DIAGNOSTIC ONLY - the slope model is still the one reported and
+  # plotted. Low power, as there: a non-significant p is weak evidence.
+  spacing <- list(tested = FALSE, test = NULL, p = NA_real_, df = NA_integer_,
+                  n_id = NA_integer_, dropped = tibble::tibble(level = character(0),
+                                                               n = integer(0)),
+                  conv = NA_character_, reason = NA_character_)
 
-    cnt <- data %>%
-      dplyr::group_by(.data[[id]], .data[[x]]) %>%
-      dplyr::summarise(k = sum(response_numeric), n = dplyr::n(),
-                       .groups = "drop")
+  if (is_cont && spacing_test) {
+    x_n <- data %>%
+      dplyr::distinct(.data[[id]], .data[[x]]) %>%
+      dplyr::count(.data[[x]], name = "n")
+    small_x <- dplyr::filter(x_n, n < spacing_min_n)
+    d_sp    <- dplyr::filter(data, !.data[[x]] %in% small_x[[x]]) %>% droplevels()
+    k_sp    <- dplyr::n_distinct(d_sp[[x]])
 
-    # one row per person, so no clustering remains and a plain glm is right
-    m_o <- stats::glm(stats::as.formula(sprintf("cbind(k, n - k) ~ %s", x)),
-                      family = binomial, data = cnt)
+    lab_of <- function(v) if (is.null(x_labels)) as.character(v)
+                          else unname(x_labels[as.character(v)])
+    spacing$dropped <- tibble::tibble(level = lab_of(small_x[[x]]),
+                                      n     = small_x$n)
 
-    # person-level heterogeneity still makes counts overdispersed relative
-    # to binomial, which would make the SEs too small
-    disp <- sum(stats::residuals(m_o, type = "pearson")^2) /
-            stats::df.residual(m_o)
+    if (n_distinct_x > spacing_max_levels) {
+      spacing$reason <- sprintf("not tested: %d distinct values > spacing_max_levels",
+                                n_distinct_x)
+    } else if (k_sp < 3) {
+      spacing$reason <- sprintf("not tested: only %d value(s) of %s with n >= %d",
+                                k_sp, x, spacing_min_n)
+    } else {
+      d_sp$.x_fac <- factor(d_sp[[x]])
+      ctrl <- lme4::glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+      fit_lin_sp <- if (nrow(small_x) == 0) fit else
+        try(lme4::glmer(form, family = binomial, data = d_sp, control = ctrl),
+            silent = TRUE)
+      fit_fac_sp <- try(lme4::glmer(
+        stats::as.formula(sprintf("response_numeric ~ question * .x_fac + %s",
+                                  re_term)),
+        family = binomial, data = d_sp, control = ctrl), silent = TRUE)
 
-    omni <- list(kind = "binomial_glm", counts = cnt, fit = m_o,
-                 test = drop1(m_o, test = "Chisq"), dispersion = disp)
-
-    if (disp > 1.5) {
-      warning("Omnibus counts are overdispersed (dispersion = ",
-              round(disp, 2), "); the quasibinomial test is the one to ",
-              "report. See $omni$test_quasi.", call. = FALSE)
-      m_q <- stats::update(m_o, family = stats::quasibinomial)
-      omni$fit_quasi  <- m_q
-      omni$test_quasi <- drop1(m_q, test = "F")
+      if (!inherits(fit_lin_sp, "try-error") && !inherits(fit_fac_sp, "try-error")) {
+        # LRT by hand: anova() refuses fits whose calls name different
+        # data objects (data vs d_sp), even when the rows are identical
+        stopifnot(stats::nobs(fit_lin_sp) == stats::nobs(fit_fac_sp))
+        ll_l <- stats::logLik(fit_lin_sp); ll_f <- stats::logLik(fit_fac_sp)
+        df_sp <- attr(ll_f, "df") - attr(ll_l, "df")
+        chi   <- max(0, 2 * (as.numeric(ll_f) - as.numeric(ll_l)))
+        tst   <- tibble::tibble(chisq = chi, df = df_sp,
+                                p = stats::pchisq(chi, df_sp, lower.tail = FALSE))
+        spacing <- utils::modifyList(spacing, list(
+          tested = TRUE, test = tst, p = tst$p,
+          df = as.integer(df_sp),
+          n_id = dplyr::n_distinct(d_sp[[id]]),
+          conv = .glmer_flag(fit_fac_sp)))
+      } else {
+        spacing$reason <- "not tested: linear or factor model failed"
+      }
     }
-
-  } else {
-
-    cnt <- data %>%
-      dplyr::group_by(.data[[id]], .data[[x]], .data[[q_type]]) %>%
-      dplyr::summarise(k = sum(response_numeric), n = dplyr::n(),
-                       .groups = "drop")
-
-    f_type <- stats::as.formula(sprintf("cbind(k, n - k) ~ %s", q_type))
-    f_add  <- stats::as.formula(sprintf("cbind(k, n - k) ~ %s + %s", x, q_type))
-    f_int  <- stats::as.formula(sprintf("cbind(k, n - k) ~ %s * %s", x, q_type))
-
-    m_type <- stats::glm(f_type, family = binomial, data = cnt)
-    m_add  <- stats::glm(f_add,  family = binomial, data = cnt)
-    m_int  <- stats::glm(f_int,  family = binomial, data = cnt)
-
-    # Each person contributes one row per type, so the rows are clustered.
-    # Cluster-robust SEs make no assumption about the within-person
-    # correlation structure and always converge, unlike the GLMM. They
-    # also absorb the overdispersion from person heterogeneity.
-    # NOTE: likelihood ratio tests are NOT valid under a robust vcov, so
-    # the omnibus tests here are Wald tests.
-    V_int <- sandwich::vcovCL(m_int, cluster = cnt[[id]])
-    V_add <- sandwich::vcovCL(m_add, cluster = cnt[[id]])
-
-    omni <- list(
-      kind    = "clustered_glm",
-      counts  = cnt, fit = m_int, fit_add = m_add, vcov = V_int,
-      coefs   = lmtest::coeftest(m_int, vcov. = V_int),
-      test_x  = lmtest::waldtest(m_type, m_add, vcov = V_add, test = "Chisq"),
-      test    = lmtest::waldtest(m_add,  m_int, vcov = V_int, test = "Chisq"))
+    if (verbose)
+      cat(if (spacing$tested)
+            sprintf("\nequal spacing (diagnostic): LRT slope vs factor df = %d, p %s\n",
+                    spacing$df, fmt_p(spacing$p))
+          else paste("\nequal spacing:", spacing$reason, "\n"))
   }
 
   if (verbose) {
@@ -1330,12 +1694,7 @@ fit_select_all <- function(data, x, id = "ResponseId",
         dplyr::mutate(
           question = as.character(question),
           # odds ratio per one-unit step in x, which is what to report
-          OR    = exp(slope),
-          stars = dplyr::case_when(p.value < .001 ~ "***",
-                                   p.value < .01  ~ "**",
-                                   p.value < .05  ~ "*",
-                                   TRUE           ~ ""),
-          label = sprintf("OR %.2f%s", OR, stars))
+          OR    = exp(slope))
 
       # No compact letter display here. A CLD answers "which GROUPS of x
       # differ", and a covariate has no groups. Letters on the slopes would
@@ -1390,6 +1749,24 @@ fit_select_all <- function(data, x, id = "ResponseId",
     dplyr::distinct(question, question_label) %>%
     dplyr::mutate(question = as.character(question)) %>%
     tibble::deframe()                  # make.names -> original text
+  lab_full <- lab_map
+
+  # "(e.g. ...)" / "(e.g., ...)" examples -> dagger; the full wording stays in
+  # $labels_full for the paper's figure caption
+  eg_pat <- "\\s*\\(e\\.g\\.?,?[^)]*\\)"
+  has_eg <- strip_examples && any(grepl(eg_pat, lab_map))
+  if (has_eg) lab_map <- stats::setNames(sub(eg_pat, "\u2020", lab_map), names(lab_map))
+
+  # smallest wrap width >= wrap_facet at which every title fits in
+  # facet_max_lines lines (label_wrap() and strwrap() break the same way)
+  facet_w <- max(wrap_facet, vapply(lab_map, function(s) {
+    w <- wrap_facet
+    while (length(strwrap(s, w)) > facet_max_lines) w <- w + 1
+    w
+  }, numeric(1)))
+  facet_theme <- ggplot2::theme(
+    strip.text = ggplot2::element_text(size = strip_size, lineheight = .9,
+                                       margin = ggplot2::margin(b = 4)))
 
   if (order_facets) {
     lv_q <- as.character(ord$question)
@@ -1404,86 +1781,15 @@ fit_select_all <- function(data, x, id = "ResponseId",
                                  levels = levels(factor(raw$question)))
   }
 
-  cap_model <- if (is.null(pred_re_form))
-    "red = model estimate (population average)"
-  else if (length(pred_re_form) == 1 && is.na(pred_re_form))
-    "red = model estimate (typical respondent, random effects = 0)"
-  else
-    "red = model estimate"
+  cap_model <- sa_cap_model(pred_re_form)
 
   # =================================================================
   # PLOT
   # =================================================================
-  if (is_cont) {
-
-    # bar width from the tightest gap between observed values, so bars
-    # neither overlap nor leave the axis looking empty
-    ux  <- sort(unique(data[[x]]))
-    bw  <- if (length(ux) > 1) 0.7 * min(diff(ux)) else 0.7
-
-    # Axis: a coerced ordered factor keeps its original level text at the
-    # positions it was scored to; a genuinely numeric x gets pretty breaks.
-    x_scale <- if (!is.null(x_labels))
-      ggplot2::scale_x_continuous(
-        breaks       = as.numeric(names(x_labels)),
-        labels       = scales::label_wrap(wrap_axis)(unname(x_labels)),
-        minor_breaks = NULL)
-    else
-      ggplot2::scale_x_continuous(breaks = scales::breaks_pretty(5))
-
-    p <- ggplot2::ggplot(emm_line, ggplot2::aes(.data[[x]], prob)) +
-      ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
-                        fill = "grey85", width = bw) +
-      # a ribbon + line rather than pointranges: the model is a smooth
-      # function of x, and drawing it as isolated points would hide that.
-      # Drawn from the fine grid, so it is the model's actual curve rather
-      # than straight segments between the observed values.
-      ggplot2::geom_ribbon(
-        ggplot2::aes(ymin = asymp.LCL, ymax = asymp.UCL),
-        fill = "firebrick", alpha = .18) +
-      ggplot2::geom_line(colour = "firebrick", linewidth = .6)
-
-    # model estimate at each observed value, to read against its bar
-    if (pred_at_observed)
-      p <- p + ggplot2::geom_point(data = emm, colour = "firebrick", size = 1.4)
-
-    p <- p +
-      ggplot2::geom_text(data = raw, ggplot2::aes(y = Inf, label = n),
-                         vjust = 1.4, size = 2.6, colour = "grey40") +
-      ggplot2::facet_wrap(
-        ~ question,
-        labeller = ggplot2::labeller(
-          question = function(z) scales::label_wrap(wrap_facet)(lab_map[z]))) +
-      ggplot2::scale_y_continuous(
-        labels = scales::percent,
-        expand = ggplot2::expansion(mult = c(.05, .20))) +
-      # continuous, NOT scale_x_discrete
-      x_scale +
-      ggplot2::labs(x = x, y = "P(yes)",
-                    caption = paste("grey = observed;", cap_model,
-                                    "\nOR = odds ratio per",
-                                    # text levels were scored 1..K, so a unit
-                                    # is one step between adjacent levels
-                                    if (!is.null(x_labels) && anyNA(
-                                          suppressWarnings(as.numeric(x_labels))))
-                                      "one-level step in" else "unit of", x,
-                                    "(FDR across items);",
-                                    "* p<.05, ** p<.01, *** p<.001")) +
-      ggplot2::theme_minimal()
-
-    # level text is usually long; angle it like the categorical figure
-    if (!is.null(x_labels))
-      p <- p + ggplot2::theme(
-        axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-
-    # per-question slope on a fixed line below the counts
-    if (!is.null(trends_df))
-      p <- p + ggplot2::geom_text(
-        data = trends_df, ggplot2::aes(x = mean(ux), y = Inf, label = label),
-        vjust = 2.8, size = 2.4, colour = "grey20", fontface = "bold",
-        inherit.aes = FALSE)
-
-  } else {
+  # ordered x: drawn by plot_select_all_ordered() from the finished result,
+  # below, so cached fits can be redrawn without refitting
+  p <- NULL
+  if (!is_cont) {
 
     p <- ggplot2::ggplot(emm, ggplot2::aes(.data[[x]], prob)) +
       ggplot2::geom_col(data = raw, ggplot2::aes(y = prop),
@@ -1496,16 +1802,18 @@ fit_select_all <- function(data, x, id = "ResponseId",
       ggplot2::facet_wrap(
         ~ question,
         labeller = ggplot2::labeller(
-          question = function(z) scales::label_wrap(wrap_facet)(lab_map[z]))) +
+          question = function(z) scales::label_wrap(facet_w)(lab_map[z]))) +
       ggplot2::scale_y_continuous(
         labels = scales::percent,
         expand = ggplot2::expansion(mult = c(.05, .20))) +  # room for 2 label rows
-      ggplot2::scale_x_discrete(labels = scales::label_wrap(wrap_axis)) +
-      ggplot2::labs(x = NULL, y = "P(yes)",
+      ggplot2::scale_x_discrete(
+      labels = function(z) scales::label_wrap(wrap_axis)(fig_label(z))) +
+      ggplot2::labs(x = fig_var(x), y = "P(yes)",
                     caption = paste("grey = observed;", cap_model,
                                     "\ngroups sharing a letter do not differ",
                                     "(within item); no letters = none differ")) +
       ggplot2::theme_minimal() +
+      facet_theme +
       ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
     # letters on a fixed line below the counts, so heights are consistent
@@ -1515,7 +1823,10 @@ fit_select_all <- function(data, x, id = "ResponseId",
         vjust = 2.8, size = 2.4, colour = "grey20", fontface = "bold")
   }
 
-  structure(
+  if (has_eg && !is.null(p))
+    p <- p + ggplot2::labs(caption = paste0(p$labels$caption, sa_dagger_note))
+
+  res <- structure(
     list(x = x, x_type = x_type, x_coerced = x_was_coerced,
          x_labels = x_labels,
          n_distinct_x = n_distinct_x,
@@ -1525,33 +1836,67 @@ fit_select_all <- function(data, x, id = "ResponseId",
          data = data, fit = fit,
          emm = emm, emm_line = emm_line,
          raw = raw, cld = cld_df, trends = trends_df, plot = p,
-         chisq_test = chisq_test, omni = omni,
-         q_type = q_type, re_structure = re_structure,
-         order = ord, labels = lab_map, cells = tab),
+         chisq_test = chisq_test, omni = omni, spacing = spacing,
+         q_type = q_type, re_structure = re_structure, re_term = re_term,
+         id = id,
+         order = ord, labels = lab_map, labels_full = lab_full, cells = tab),
     class = "select_all")
+
+  if (is_cont)
+    res$plot <- plot_select_all_ordered(
+      res, wrap_facet = wrap_facet, facet_max_lines = facet_max_lines,
+      strip_size = strip_size, wrap_axis = wrap_axis)
+  res
 }
 
 
-# ---- fit both re.form variants, cache, save both figures ---------
-run_select_all <- function(long, x, tag, rerun = rerun_mods,
-                           width = 15, height = 14, scale = 0.8, ...) {
+# ---- career-stage-adjusted sensitivity fit ------------------------
+# Takes a fit_select_all() result (its $data already has x coded exactly
+# as the main model used it) and, on the respondents with a career stage:
+#   item level  question * x + question * career   vs  question + x + question * career
+#               (the adjusted analogue of p_item_int), and the same
+#               comparison WITHOUT career on the same respondents (_cc)
+#   omnibus     .omnibus_counts() with and without career
+# Career stage is a slope on career_stage_value, centred at the middle of
+# its range to help the optimiser. Four extra glmer fits per cell, so this
+# is slow; results are cached alongside the main fit by run_select_all().
+fit_select_all_adjusted <- function(res, adj = "career_stage_value") {
+  x  <- res$x
+  id <- res$id
+  stopifnot(adj %in% names(res$data))
 
-  f_pop  <- file.path(fit_path, paste0("res_", tag, ".rds"))
-  f_subj <- file.path(fit_path, paste0("res_", tag, "_1.rds"))
+  d <- res$data %>% dplyr::filter(!is.na(.data[[adj]])) %>% droplevels()
+  d$.adj <- d[[adj]] - mean(range(d[[adj]]))
 
-  if (rerun) {
-    saveRDS(fit_select_all(long, x = x, re.form = NULL, ...), f_pop)
-    saveRDS(fit_select_all(long, x = x, re.form = NA,   ...), f_subj)
+  ctrl <- lme4::glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+  g <- function(rhs) try(lme4::glmer(
+    stats::as.formula(paste("response_numeric ~", rhs, "+", res$re_term)),
+    family = binomial, data = d, control = ctrl), silent = TRUE)
+  lrt_p <- function(m0, m1) {
+    if (inherits(m0, "try-error") || inherits(m1, "try-error")) return(NA_real_)
+    anova(m0, m1)[["Pr(>Chisq)"]][2]
   }
 
-  out <- list(pop = readRDS(f_pop), subj = readRDS(f_subj))
+  m_cc   <- g(sprintf("question * %s", x))
+  m_cc0  <- g(sprintf("question + %s", x))
+  m_adj  <- g(sprintf("question * %s + question * .adj", x))
+  m_adj0 <- g(sprintf("question + %s + question * .adj", x))
 
-  ggsave(file.path(fig_path, paste0(tag, ".jpg")),   out$pop$plot,
-         width = width, height = height, scale = scale)
-  ggsave(file.path(fig_path, paste0(tag, "_1.jpg")), out$subj$plot,
-         width = width, height = height, scale = scale)
+  o_cc  <- try(.omnibus_counts(d, x = x, id = id, q_type = res$q_type,
+                               quiet = TRUE), silent = TRUE)
+  o_adj <- try(.omnibus_counts(d, x = x, id = id, q_type = res$q_type,
+                               adj = ".adj", quiet = TRUE), silent = TRUE)
+  op <- function(o) if (inherits(o, "try-error")) .omni_p(NULL) else .omni_p(o)
 
-  out
+  list(n_id = dplyr::n_distinct(d[[id]]), n_obs = nrow(d),
+       p_item_int_cc  = lrt_p(m_cc0,  m_cc),
+       p_item_int_adj = lrt_p(m_adj0, m_adj),
+       p_total_cc     = op(o_cc)$p_total,
+       p_total_adj    = op(o_adj)$p_total,
+       p_valence_cc   = op(o_cc)$p_valence,
+       p_valence_adj  = op(o_adj)$p_valence,
+       conv_adj       = .glmer_flag(m_adj),
+       fit_adj = m_adj, omni_adj = o_adj)
 }
 
 
@@ -1656,16 +2001,11 @@ prep_demo <- function(survey, spec) {
 
 
 # ---- select-all questions -----------------------------------------
-# free-text "Other" answers that one could consder could be entered here
-# now handled by consensus in the filtering
-# opps_none_text <- c(
-#   "example something",
-#   )
-# opps_some_text <- "another example"
+# free-text "Other" answers are resolved upstream, by consensus, in the
+# tidying step, so only the "none" option is handled here
 
 clean_opps <- function(long)
-  clean_select_all(long, q = "promising_opps", none_pattern = "None",
-                   text_col  = "promising_opps_14_text")
+  clean_select_all(long, q = "promising_opps", none_pattern = "None")
 
 clean_challenges <- function(long)
   clean_select_all(long, q = "challenges", none_pattern = "^No")
@@ -1686,11 +2026,15 @@ clean_reasons <- function(long)
 
 sa_specs <- list(
   opportunity = list(q = "promising_opps", clean = clean_opps,
-                     q_type = NULL, label = "opportunities"),
+                     q_type = NULL, label = "opportunities",
+                     x_text_size = 11, x_title_size = 14),
   challenges  = list(q = "challenges",     clean = clean_challenges,
-                     q_type = NULL, label = "challenges"),
+                     q_type = NULL, label = "challenges",
+                     x_text_size = 11, x_title_size = 14),
   reasons     = list(q = "ai_use_reasons", clean = clean_reasons,
-                     q_type = "q_type", label = "reasons for use", re_structure = "correlated")
+                     q_type = "q_type", label = "reasons for use",
+                     x_text_size = 11, x_title_size = 14,
+                     re_structure = "correlated")
 )
 
 
@@ -1701,11 +2045,22 @@ ord_specs <- list(
     label  = "AI use frequency",
     filter = NULL),
 
+  # primary version: Indifferent (and Other) excluded
   gen_attitude = list(
     y      = "gen_attitude",
     label  = "general attitude",
     filter = function(d)
-      dplyr::filter(d, !gen_attitude %in% c("Other", "Indifferent")))
+      dplyr::filter(d, !gen_attitude %in% c("Other", "Indifferent"))),
+
+  # sensitivity version: Indifferent merged into "A mix ..." (Other still
+  # excluded). `split` draws the merged level's bar stacked, so the
+  # Indifferent respondents inside it stay visible.
+  gen_attitude_mix = list(
+    y      = "gen_attitude_mix",
+    label  = "general attitude (Indifferent = A mix)",
+    filter = function(d) dplyr::filter(d, !is.na(gen_attitude_mix)),
+    split  = list(col = "gen_attitude", level = "Indifferent",
+                  into = ga_mix_level))
 )
 
 
@@ -1838,10 +2193,6 @@ check_cells <- function(long, x, min_n = 5,
 
 
 # ---- drop items that cannot be modelled ---------------------------
-# An item endorsed by almost nobody (or almost everybody) within a
-# demographic produces separated cells and no estimable interaction.
-# Report those items as plain percentages instead of modelling them.
-# ---- drop items that cannot be modelled ---------------------------
 # Two independent reasons an item has to go:
 #
 #   RATE   endorsed by almost nobody (or almost everybody) overall, so
@@ -1931,6 +2282,12 @@ run_select_all <- function(long, x, tag,
                            rerun     = rerun_mods,
                            # re_forms  = list(pop = NULL, subj = NA),
                            re_forms  = list(subj = NA),
+                           # career-stage-adjusted sensitivity fit, cached
+                           # as res_<tag>_adj.rds; returned as $adj
+                           adjust    = TRUE,
+                           # x-axis label and title sizes in pt; NULL keeps
+                           # the default
+                           x_text_size = NULL, x_title_size = NULL,
                            width = 18, height = 14, scale = 0.8, ...) {
 
   out <- list()
@@ -1939,29 +2296,43 @@ run_select_all <- function(long, x, tag,
     suffix <- if (nm == "pop") "" else paste0("_", nm)
     f      <- file.path(fit_path, paste0("res_", tag, suffix, ".rds"))
 
-    if (rerun)
+    if (rerun || !file.exists(f))
       saveRDS(fit_select_all(long, x = x, re.form = re_forms[[nm]], ...), f)
 
     out[[nm]] <- readRDS(f)
+
+    # redrawn here, not read from the cache, so styling changes need no refit
+    if (!is.null(out[[nm]]$emm_line))
+      out[[nm]]$plot <- plot_select_all_ordered(out[[nm]])
+    if (!is.null(x_text_size))
+      out[[nm]]$plot <- out[[nm]]$plot +
+        ggplot2::theme(axis.text.x = ggplot2::element_text(size = x_text_size))
+    if (!is.null(x_title_size))
+      out[[nm]]$plot <- out[[nm]]$plot +
+        ggplot2::theme(axis.title.x = ggplot2::element_text(size = x_title_size))
 
     ggsave(file.path(fig_path, paste0(tag, suffix, ".jpg")), out[[nm]]$plot,
            width = width, height = height, scale = scale)
   }
 
-  out
+  # the adjustment does not depend on re.form (it only uses $data, $x and
+  # the random-effect term), so it is fitted once, from the first variant
+  adj <- NULL
+  if (adjust) {
+    f_adj <- file.path(fit_path, paste0("res_", tag, "_adj.rds"))
+    if (rerun || !file.exists(f_adj)) {
+      a <- try(fit_select_all_adjusted(out[[1]]), silent = TRUE)
+      if (inherits(a, "try-error"))
+        a <- list(error = conditionMessage(attr(a, "condition")))
+      saveRDS(a, f_adj)
+    }
+    adj <- if (file.exists(f_adj)) readRDS(f_adj) else list(error = "no cached fit")
+  }
+
+  list(fits = out, adj = adj)
 }
 
 
-# ---- one cell of the grid ------------------------------------------
-# run_sa_cell(survey, spec, demo_specs[[demo]],
-#               re_structure = if (is.null(spec$q_type)) "nested" else "nested")
-
-# sa   <- sa_grid$sa[[i]]
-#   demo <- sa_grid$demo[[i]]
-#   spec <- sa_specs[[sa]]
-#   spec$label_tag <- sa
-
-# demo = demo_specs[['career_stage']]
 # ---- one cell of the grid ------------------------------------------
 run_sa_cell <- function(survey, sa, demo,
                         min_n_level = 20, verbose = FALSE, ...) {
@@ -1985,7 +2356,9 @@ run_sa_cell <- function(survey, sa, demo,
   lvl_n <- long %>%
     dplyr::distinct(ResponseId, .data[[demo$var]]) %>%
     dplyr::count(.data[[demo$var]], name = "n_id")
- 
+
+  small <- NULL                      # levels dropped for small n (categorical)
+
   if (!is_cont) {
  
     # CATEGORICAL: each level carries its own parameter, so a level with
@@ -2027,8 +2400,9 @@ run_sa_cell <- function(survey, sa, demo,
   n_x <- if (is_cont) dplyr::n_distinct(long[[demo$var]])
          else nlevels(long[[demo$var]])
  
-  base <- list(tag = tag, cells = chk, lvl_n = lvl_n,
+  base <- list(tag = tag, x = demo$var, cells = chk, lvl_n = lvl_n,
                is_cont = is_cont, n_x = n_x,
+               dropped_levels    = if (!is.null(small) && nrow(small)) small,
                dropped_items     = attr(long, "dropped_items"),
                dropped_rate      = attr(long, "dropped_rate"),
                dropped_separated = attr(long, "dropped_separated"))
@@ -2046,10 +2420,12 @@ run_sa_cell <- function(survey, sa, demo,
                    q_type = sa$q_type, verbose = verbose,
                    re_structure = sa$re_structure,
                    x_type = if (is_cont) "continuous" else "categorical",
+                   # no career-stage adjustment of career stage itself
+                   adjust = demo$var != "career_stage",
+                   x_text_size = sa$x_text_size,
+                   x_title_size = sa$x_title_size,
                    ...),
     silent = TRUE)
-
-    # print(lme4::VarCorr(fit_cor))
  
   if (inherits(fit, "try-error")) {
     msg <- conditionMessage(attr(fit, "condition"))
@@ -2093,6 +2469,23 @@ names(sa_results) <- paste(sa_grid$sa, sa_grid$demo, sep = "__")
 
 # ---- summary table --------------------------------------------------
 
+# one string per cell: "<item>: OR 0.55 (95% CI 0.37-0.81, p = 0.038); ...", in
+# figure order. p is FDR-adjusted across the items of the cell, as for the line
+# style. The CI is an UNADJUSTED Wald interval from the slope and its SE, not
+# the $trends limits: emmeans cannot FDR-adjust intervals and falls back to
+# Bonferroni ones. So a CI can exclude 1 while the FDR p is above .05.
+# NA for a categorical x (no slope).
+.item_or <- function(f) {
+  tr <- f$trends
+  if (is.null(tr)) return(NA_character_)
+  tr <- tr[order(tr$question), ]
+  item <- sub("\u2020", "", f$labels[as.character(tr$question)])
+  z    <- stats::qnorm(.975)
+  paste(sprintf("%s: OR %.2f (95%% CI %.2f-%.2f, p = %.3f)", item, tr$OR,
+                exp(tr$slope - z * tr$SE), exp(tr$slope + z * tr$SE), tr$p.value),
+        collapse = "; ")
+}
+
 if (length(sa_results)) {
 sa_summary <- purrr::imap_dfr(sa_results, function(z, nm) {
 
@@ -2107,24 +2500,22 @@ sa_summary <- purrr::imap_dfr(sa_results, function(z, nm) {
   if (!is.na(z$error)) return(base)
 
   # whichever re.form variants were fitted, prefer pop when present
-  f <- if (!is.null(z$res$pop)) z$res$pop else z$res[[1]]
+  fits <- z$res$fits
+  f <- if (!is.null(fits$pop)) fits$pop else fits[[1]]
   if (is.null(f) || is.null(f$fit))
     return(dplyr::mutate(base, error = "no fitted model in $res"))
-  o <- f$omni
 
-  # omnibus: does total endorsement differ across the demographic?
-  # the quasibinomial version reports an F column, the binomial a Chisq
-  # one, so the p column is found by prefix rather than by name
-  p_total <- if (o$kind == "binomial_glm") {
-    tst <- if (is.null(o$test_quasi)) o$test else o$test_quasi
-    tst[[grep("^Pr", names(tst))[1]]][2]
-  } else {
-    o$test_x[["Pr(>Chisq)"]][2]
-  }
+  # p_total: does total endorsement differ across the demographic?
+  # p_valence (q_type questions only): does the valence balance shift?
+  op <- .omni_p(f$omni)
 
-  # only for q_type questions: does the valence balance shift?
-  p_valence <- if (o$kind == "clustered_glm")
-    o$test[["Pr(>Chisq)"]][2] else NA_real_
+  # equal-spacing diagnostic (continuous x only; NULL on old cached fits)
+  sp <- f$spacing
+
+  # career-stage-adjusted sensitivity fit (NULL / $error when not run)
+  a  <- z$res$adj
+  a_ok <- !is.null(a) && is.null(a$error)
+  ga <- function(nm) if (a_ok) a[[nm]] else NA_real_
 
   dplyr::bind_rows(base) %>%
     dplyr::mutate(
@@ -2132,13 +2523,41 @@ sa_summary <- purrr::imap_dfr(sa_results, function(z, nm) {
       n_id      = f$n_id,
       singular  = if (inherits(f$fit, "merMod"))
                     lme4::isSingular(f$fit) else NA,
-      p_total   = .env$p_total,
-      p_valence = .env$p_valence,
+      conv_flag = .glmer_flag(f$fit),
+      p_total   = op$p_total,
+      p_valence = op$p_valence,
       # item-level: does the demographic effect differ by item?
       p_item_int = if (!is.null(f$chisq_test))
-                     f$chisq_test[["Pr(Chi)"]][2] else NA_real_)
+                     f$chisq_test[["Pr(Chi)"]][2] else NA_real_,
+      # odds ratio per one-level step in x, for each item
+      item_or = .item_or(f),
+      # ---- equal spacing (diagnostic; low power, see fit_select_all) ----
+      spacing_df      = if (!is.null(sp)) sp$df else NA_integer_,
+      spacing_p       = if (!is.null(sp)) sp$p  else NA_real_,
+      spacing_n       = if (!is.null(sp)) sp$n_id else NA_integer_,
+      spacing_dropped = if (!is.null(sp) && nrow(sp$dropped))
+                          paste(sprintf("%s (n = %d)", sp$dropped$level,
+                                        sp$dropped$n), collapse = "; ")
+                        else "",
+      spacing_note    = if (is.null(sp) || !f$x_type == "continuous") "n/a: categorical x"
+                        else if (sp$tested) sp$conv else sp$reason,
+      # ---- career-stage adjustment (sensitivity) ----------------------
+      # *_cc  = unadjusted, on the same respondents as the adjusted fit
+      n_id_adj       = if (a_ok) a$n_id else NA_integer_,
+      p_total_cc     = ga("p_total_cc"),
+      p_total_adj    = ga("p_total_adj"),
+      p_valence_cc   = ga("p_valence_cc"),
+      p_valence_adj  = ga("p_valence_adj"),
+      p_item_int_cc  = ga("p_item_int_cc"),
+      p_item_int_adj = ga("p_item_int_adj"),
+      adj_note       = if (is.null(a)) "not run (x is career stage)"
+                       else if (!a_ok) paste("failed:", a$error)
+                       else a$conv_adj)
 })
 
+cat("\nNOTE: exploratory. p-values are NOT adjusted across the cells of this",
+    "\ngrid (see the INFERENCE note in the header). *_adj = career stage added",
+    "\nas a covariate; *_cc = unadjusted on those same respondents.\n\n")
 print(as.data.frame(sa_summary), row.names = FALSE)
 
 readr::write_csv(sa_summary, file.path(fig_path, "select_all_summary.csv"))
@@ -2147,17 +2566,10 @@ readr::write_csv(sa_summary, file.path(fig_path, "select_all_summary.csv"))
 dplyr::filter(sa_summary, !is.na(error))
 }
 
-# a single plot
-# sa_results$opportunity__career_stage$res$subj$plot
-
 
 # =================================================================
 # 6. ORDINAL GRID: every ordinal outcome x every demographic
 # =================================================================
-#survey
-#run_ord_cell(survey, ord_grid[[ord]], demo_specs[[demo]]))
-#gen_attitude career_stage 
-
 run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
 
   tag <- paste0(ord$y, "_by_", demo$var)
@@ -2167,19 +2579,15 @@ run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
   if (!is.null(ord$filter)) dat <- ord$filter(dat)
   dat <- droplevels(dat)
 
-  # The interaction diagnostic uses career_stage as the covariate, which
-  # is meaningless when career_stage IS the predictor.
-  cov <- if (demo$var == "career_stage") NULL else "career_stage"
-
   fit <- if (demo$type == "count") {
     # IO/ds_freq/career_stage is an ordered count: a single slope on its own scale. The
     # min_distinct_x guard is lowered deliberately 
     try(fit_ordinal_by_continuous(dat, x = demo$var, y = ord$y,
-                                  covariate = cov, min_distinct_x = 3,
+                                  min_distinct_x = 3,
                                   verbose = verbose), silent = TRUE)
   } else {
     try(fit_ordinal_by(dat, x = demo$var, y = ord$y,
-                       covariate = cov, min_n = min_n,
+                       min_n = min_n,
                        verbose = verbose), silent = TRUE)
   }
 
@@ -2188,14 +2596,79 @@ run_ord_cell <- function(survey, ord, demo, min_n = 20, verbose = FALSE) {
     return(list(tag = tag, error = conditionMessage(attr(fit, "condition"))))
   }
 
+  # ---- career-stage-adjusted sensitivity fits -----------------------
+  # adj: for the model behind p_main (the slope, for a count-type x).
+  # adj_factor: also for the factor model, when it replaced the slope.
+  .try_adj <- function(d) {
+    a <- try(.adjusted_clm(d, x = demo$var, y = ord$y), silent = TRUE)
+    if (inherits(a, "try-error"))
+      list(error = conditionMessage(attr(a, "condition"))) else a
+  }
+  adj <- adj_factor <- NULL
+  if (demo$var != "career_stage") {
+    adj <- .try_adj(fit$data)
+    if (inherits(fit, "ordinal_by_cont") && !is.null(fit$factor_fit))
+      adj_factor <- .try_adj(fit$factor_fit$data)
+  }
+
+  # merged-level composition in the figure (gen_attitude_mix)
+  if (!is.null(ord$split)) fit$plot <- .add_split_bars(fit, ord$split)
+
   ggsave(file.path(fig_path, paste0(tag, ".jpg")), fit$plot,
          width = 10, height = 5)
 
-  list(tag = tag, res = fit, error = NA_character_)
+  list(tag = tag, res = fit, adj = adj, adj_factor = adj_factor,
+       error = NA_character_)
+}
+
+# ---- stacked bar for a merged outcome level ------------------------
+# In the merged level's panel, the observed bar is split into the
+# respondents who gave the original answer (split$level, darker grey, on
+# top) and the rest. The layer goes in directly above the grey bars, so
+# the model points and line still sit on top.
+.add_split_bars <- function(res, split) {
+  src <- if (inherits(res, "ordinal_by_cont") && !is.null(res$factor_fit))
+    res$factor_fit else res
+  d <- src$data; x <- src$x; y <- src$y
+
+  tot <- dplyr::count(d, .data[[x]], name = "n_x")
+  parts <- d %>%
+    dplyr::filter(.data[[y]] == split$into) %>%
+    dplyr::mutate(.part = ifelse(.data[[split$col]] %in% split$level,
+                                 split$level, "rest")) %>%
+    dplyr::count(.data[[x]], .part) %>%
+    dplyr::left_join(tot, by = x) %>%
+    dplyr::mutate(prop = n / n_x,
+                  # first level stacks on TOP in position_stack()
+                  .part = factor(.part, levels = c(split$level, "rest")),
+                  .fill = ifelse(.part == split$level, "grey55", "grey85"))
+  parts[[y]] <- factor(split$into, levels = levels(d[[y]]))
+
+  # the slope figure maps x to .x_plot; the categorical one to x itself
+  if (inherits(src, "ordinal_by_cont"))
+    parts$.x_plot <- if (isTRUE(src$discrete_axis))
+      factor(parts[[x]], levels = sort(unique(d[[x]]))) else parts[[x]]
+
+  p <- res$plot
+  bars <- ggplot2::geom_col(data = parts,
+                            ggplot2::aes(y = prop, fill = .fill, group = .part),
+                            width = .7, position = "stack")
+  p$layers <- append(p$layers, list(bars), after = 1)
+  n_lvl <- sum(parts$n[parts$.part == split$level])
+  p + ggplot2::scale_fill_identity() +
+    ggplot2::labs(caption = paste0(
+      p$labels$caption,
+      sprintf("\ndarker grey in the '%s' panel = the %d respondents who answered '%s' (merged into it)",
+              split$into, n_lvl, split$level)))
 }
 
 ord_grid <- tidyr::expand_grid(ord = names(ord_specs), demo = names(demo_specs)) %>%
-  dplyr::filter(!ord == demo)
+  dplyr::filter(!ord == demo,
+                # attitude x AI use is two OUTCOMES, so the direction cannot
+                # be identified; it is reported as a polychoric correlation
+                # in section 8 instead of as a model
+                !(ord %in% c("gen_attitude", "gen_attitude_mix") &
+                    demo == "ai_use_freq"))
 
 ord_results <- purrr::pmap(ord_grid, function(ord, demo)
   run_ord_cell(survey, ord_specs[[ord]], demo_specs[[demo]]))
@@ -2209,92 +2682,219 @@ ord_summary <- purrr::imap_dfr(ord_results, function(z, nm) {
   if (!is.na(z$error)) return(base)
 
   f <- z$res
+  asm <- f$assump
+  a  <- z$adj
+  a_ok <- !is.null(a) && is.null(a$error)
+  ga <- function(nm) if (a_ok) a[[nm]] else NA_real_
 
-  dplyr::bind_rows(base) %>%
+  out <- dplyr::bind_rows(base) %>%
     dplyr::mutate(
       n        = f$n,
       # convergence code -3 means the thresholds are not increasing and
       # the fit is INVALID - do not interpret those rows
-      conv     = paste(f$fit$convergence$code, collapse = "/"),
+      conv     = .clm_code(f$fit),
       p_main   = f$lrt[["Pr(>Chi)"]][2],
-      p_int    = if (is.null(f$int_test)) NA_real_
-                 else f$int_test[["Pr(>Chisq)"]][2],
       dropped  = if (!is.null(f$dropped) && nrow(f$dropped))
-                   paste(f$dropped[[f$x]], collapse = "; ") else "")
+                   paste(f$dropped[[f$x]], collapse = "; ") else "",
+      # ---- assumption checks on the main fit (LRT p; NA when the
+      # auxiliary fit was invalid - see conv_flag) ---------------------
+      # p_po small    -> x's effect differs across outcome thresholds
+      # p_scale small -> x changes the latent SD, not only its location
+      p_po     = asm$p_po,
+      p_scale  = asm$p_scale,
+      # ---- career-stage adjustment (sensitivity) ----------------------
+      # p_main_cc  = unadjusted on the respondents WITH a career stage
+      # p_main_adj = adjusted for career stage (slope), same respondents
+      # b_cc vs b_adj: not directly comparable, because adding a covariate
+      # rescales probit coefficients (Karlson et al. 2012)
+      # b_*        = slope (latent SD per unit of x), count-type x only
+      n_adj      = if (a_ok) a$n else NA_integer_,
+      p_main_cc  = ga("p_cc"),
+      p_main_adj = ga("p_adj"),
+      b_main     = if (inherits(f, "ordinal_by_cont")) f$slope$estimate else NA_real_,
+      b_cc       = ga("b_cc"),
+      b_adj      = ga("b_adj"),
+      adj_note   = if (is.null(a)) "not run (x is career stage)"
+                   else if (!a_ok) paste("failed:", a$error) else "",
+      # every fit that was not clean, in one readable column
+      conv_flag  = paste(c(.conv_flag(conv, "main"),
+                           .conv_flag(asm$conv_po, "PO check"),
+                           .conv_flag(asm$conv_scale, "scale check"),
+                           if (a_ok) .conv_flag(a$conv_adj, "adjusted")),
+                         collapse = "; "))
+
+  # count-type predictors: the equal-spacing test, and which model the
+  # figure uses. p_main stays the slope (all respondents); p_factor is the
+  # factor model's main effect on the reduced data, filled in only when
+  # the factor model replaced the slope.
+  if (inherits(f, "ordinal_by_cont")) {
+    sp  <- f$spacing
+    out <- dplyr::mutate(out,
+      model_used      = f$model_used,
+      spacing_df      = sp$df,
+      spacing_p       = sp$p,
+      spacing_n       = sp$n,
+      spacing_dropped = if (nrow(sp$dropped))
+                          paste(sprintf("%s (n = %d)", sp$dropped$level,
+                                        sp$dropped$n), collapse = "; ")
+                        else "",
+      spacing_note    = if (sp$tested) "" else sp$reason,
+      p_factor        = if (is.null(f$factor_fit)) NA_real_
+                        else f$factor_fit$lrt[["Pr(>Chi)"]][2],
+      p_factor_adj    = if (!is.null(z$adj_factor) && is.null(z$adj_factor$error))
+                          z$adj_factor$p_adj else NA_real_)
+  } else {
+    out <- dplyr::mutate(out, model_used = "categorical")
+  }
+  out
 })
 
 if (nrow(ord_summary)) {
+cat("\nNOTE: exploratory. p-values are NOT adjusted across the cells of this",
+    "\ngrid (see the INFERENCE note in the header). The equal-spacing test",
+    "\n(spacing_p) has low power. *_adj = career stage added as a covariate;",
+    "\n*_cc = unadjusted on those same respondents. ai_use_freq / ds_freq:",
+    "\nhigher = MORE use, so a positive b means more use goes with a higher",
+    "\noutcome category.\n\n")
 print(as.data.frame(ord_summary), row.names = FALSE)
 
 readr::write_csv(ord_summary, file.path(fig_path, "ordinal_summary.csv"))
 
 # anything that did not converge cleanly
-dplyr::filter(ord_summary, !is.na(error) | conv != 0)
+dplyr::filter(ord_summary, !is.na(error) | conv_flag != "")
 }
 
-# NOT done below HERE
-# ---- IO as a factor, for comparison ---------------------------------
-# IO takes 5 values, so the slope version assumes equal spacing between
-# adjacent counts. Fitting it as a factor says whether that matters.
-io_factor <- purrr::map(names(ord_specs), function(o) {
-  ord <- ord_specs[[o]]
-  dat <- prep_demo(survey, demo_specs$IO)
-  if (!is.null(ord$filter)) dat <- ord$filter(dat)
-  try(fit_ordinal_by(droplevels(dat), x = "IO", y = ord$y,
-                     covariate = "career_stage", min_n = 20, verbose = FALSE),
-      silent = TRUE)
-})
-names(io_factor) <- names(ord_specs)
+# Equal spacing for the count-type predictors (IO, career_stage, ds_freq,
+# policies, ai_use_freq) is now tested inside fit_ordinal_by_continuous():
+# see the spacing_* and model_used columns of ord_summary above.
 
-# compare AIC: if the factor version is no better, the slope is fine
-purrr::imap_dfr(io_factor, function(z, nm) {
-  slope <- ord_results[[paste0(nm, "__IO")]]$res
-  if (inherits(z, "try-error") || is.null(slope)) return(tibble::tibble(y = nm))
-  tibble::tibble(y = nm,
-                 AIC_slope  = AIC(slope$fit),
-                 AIC_factor = AIC(z$fit),
-                 diff       = AIC(z$fit) - AIC(slope$fit))
-})
 
-#SCE need to refit this with the same data this is not the correct comparison
-nrow (io_factor$ai_use_freq$data) == nrow (ord_results$ai_use_freq__IO$res$data)
+# =================================================================
+# 6b. EXCLUSIONS: every rule that removes respondents (or items), with n
+# =================================================================
+# One row per rule. `scope` says where it applies:
+#   variable         whenever that variable is used (predictor or outcome)
+#   select-all       whenever that question is the outcome
+#   ordinal cell /   one cell of a grid only
+#   select-all cell
+# Counts are of respondents unless `unit` says otherwise. Rules overlap
+# (one person can be missing several variables), so rows do not sum.
+# The target-audience filter is applied upstream in 01_tidy.r and is not
+# counted here; n_start is the data as read.
+n_start <- nrow(survey)
 
-# ---- Career stage as a factor, for comparison ---------------------------------
-# Career takes 4 values, so the slope version assumes equal spacing between
-# adjacent counts. Fitting it as a factor says whether that matters.
-career_factor <- purrr::map(names(ord_specs), function(o) {
-  ord <- ord_specs[[o]]
-  dat <- prep_demo(survey, demo_specs$career_stage)
-  if (!is.null(ord$filter)) dat <- ord$filter(dat)
-  try(fit_ordinal_by(droplevels(dat), x = "career_stage", y = ord$y,
-                     covariate = NULL, min_n = 20, verbose = FALSE),
-      silent = TRUE)
-})
-names(career_factor) <- names(ord_specs)
+.excl <- function(scope, variable, cell, reason, level, n,
+                  unit = "respondents")
+  tibble::tibble(scope = scope, variable = variable, cell = cell,
+                 reason = reason, level = as.character(level),
+                 n = as.integer(n), unit = unit)
 
-# compare AIC: if the factor version is no better, the slope is fine
-purrr::imap_dfr(career_factor, function(z, nm) {
-  slope <- ord_results[[paste0(nm, "__career_stage")]]$res
-  if (inherits(z, "try-error") || is.null(slope)) return(tibble::tibble(y = nm))
-  tibble::tibble(y = nm,
-                 AIC_slope  = AIC(slope$fit),
-                 AIC_factor = AIC(z$fit),
-                 diff       = AIC(z$fit) - AIC(slope$fit))
+# ---- variable level -------------------------------------------------
+excl_demo <- purrr::map_dfr(demo_specs, function(s) {
+  v <- as.character(survey[[s$var]])
+  dplyr::bind_rows(
+    .excl("variable", s$var, NA, "missing / blank / prefer not (-> NA)", NA,
+          sum(is.na(v))),
+    if (length(s$drop))
+      .excl("variable", s$var, NA, "level excluded on substantive grounds (spec$drop)",
+            s$drop, vapply(s$drop, function(l) sum(v %in% l), integer(1))))
 })
 
-# sanity check: the factor and slope versions should have the same number of rows
-# nrow (career_factor$ai_use_freq$data) == nrow (ord_results$ai_use_freq__career_stage$res$data)
+# IO is NA when ANY component is missing; the components overlap
+excl_io <- purrr::map_dfr(c("caregiver_IO", "neuro_IO", "firstgen_IO", "race_IO"),
+  function(v) .excl("variable", "IO", NA,
+                    "component missing or prefer not (IO set to NA; overlaps)",
+                    v, sum(is.na(survey[[v]]))))
 
-# SCE need to add in the ds_freq as a factor for comparison as well.
+ga_chr <- as.character(survey$gen_attitude)
+# (ai_use_freq is already counted above, as a demographic spec)
+excl_out <- dplyr::bind_rows(
+  .excl("variable", "gen_attitude", NA, "missing / blank (-> NA)", NA, sum(is.na(ga_chr))),
+  .excl("variable", "gen_attitude", NA, "level excluded (primary version)",
+        c("Other", "Indifferent"),
+        c(sum(ga_chr %in% "Other"), sum(ga_chr %in% "Indifferent"))),
+  .excl("variable", "gen_attitude_mix", NA, "level excluded (sensitivity version)",
+        "Other", sum(ga_chr %in% "Other")),
+  .excl("variable", "gen_attitude_mix", NA,
+        paste0("NOT excluded: merged into '", ga_mix_level, "'"),
+        "Indifferent", sum(ga_chr %in% "Indifferent")))
 
+# ---- select-all questions ------------------------------------------
+excl_sa <- purrr::map_dfr(sa_specs, function(sa) {
+  long0 <- expand_select_all(survey, q = sa$q)
+  cl    <- suppressMessages(sa$clean(long0))
+  items_gone <- setdiff(unique(long0$question_label), unique(cl$question_label))
+  dplyr::bind_rows(
+    .excl("select-all", sa$q, NA, "no option ticked (question skipped)", NA,
+          n_start - dplyr::n_distinct(long0$ResponseId)),
+    .excl("select-all", sa$q, NA, "ticked 'none' AND another option (conflict)",
+          NA, length(attr(cl, "conflicts"))),
+    if (length(items_gone))
+      .excl("select-all", sa$q, NA,
+            "option not modelled ('none' / 'Other' / single neutral item)",
+            items_gone, NA, "items"))
+})
+
+# ---- ordinal cells ---------------------------------------------------
+excl_ord <- purrr::imap_dfr(ord_results, function(z, nm) {
+  if (!is.na(z$error))
+    return(.excl("ordinal cell", NA, nm, paste("cell failed:", z$error), NA, NA, "cell"))
+  f <- z$res
+  dplyr::bind_rows(
+    if (!is.null(f$dropped) && nrow(f$dropped))
+      .excl("ordinal cell", f$x, nm, "predictor level with n < min_n excluded",
+            f$dropped[[f$x]], f$dropped$n),
+    if (inherits(f, "ordinal_by_cont") && nrow(f$spacing$dropped))
+      .excl("ordinal cell", f$x, nm,
+            paste("x value with n < min_n_level excluded from the equal-spacing",
+                  "test (and the factor figure, if used); kept in the slope"),
+            f$spacing$dropped$level, f$spacing$dropped$n),
+    if (!is.null(z$adj) && is.null(z$adj$error))
+      .excl("ordinal cell", "career_stage", nm,
+            "career stage missing: excluded from the adjusted fit only", NA,
+            f$n - z$adj$n))
+})
+
+# ---- select-all cells ------------------------------------------------
+excl_sa_cell <- purrr::imap_dfr(sa_results, function(z, nm) {
+  f <- if (!is.null(z$res)) z$res$fits[[1]]
+  dplyr::bind_rows(
+    if (!is.null(z$dropped_levels))
+      .excl("select-all cell", z$x, nm,
+            "predictor level with < min_n_level respondents excluded",
+            z$dropped_levels[[z$x]], z$dropped_levels$n_id),
+    if (length(z$dropped_rate))
+      .excl("select-all cell", z$x, nm, "item endorsed by < 3% or > 97%: not modelled",
+            z$dropped_rate, NA, "items"),
+    if (length(z$dropped_separated))
+      .excl("select-all cell", z$x, nm, "item separated along x: not modelled",
+            z$dropped_separated, NA, "items"),
+    if (!is.null(f$spacing) && nrow(f$spacing$dropped))
+      .excl("select-all cell", z$x, nm,
+            "x value with < spacing_min_n respondents excluded from the equal-spacing test only",
+            f$spacing$dropped$level, f$spacing$dropped$n),
+    if (!is.null(f) && !is.null(z$res$adj) && is.null(z$res$adj$error))
+      .excl("select-all cell", "career_stage", nm,
+            "career stage missing: excluded from the adjusted fit only", NA,
+            f$n_id - z$res$adj$n_id),
+    if (!is.na(z$error))
+      .excl("select-all cell", z$x, nm, paste("cell failed:", z$error), NA, NA, "cell"))
+})
+
+exclusions <- dplyr::bind_rows(
+  .excl("data", NA, NA, "rows read (after the upstream target-audience filter)",
+        NA, n_start),
+  excl_demo, excl_io, excl_out, excl_sa, excl_ord, excl_sa_cell)
+
+print(as.data.frame(exclusions), row.names = FALSE)
+readr::write_csv(exclusions, file.path(fig_path, "exclusions.csv"))
 
 
 # =================================================================
 # 7. CROSS-TABS: are the demographics confounded with career stage?
 # =================================================================
 # Every model above pools over career stage. These tables say whether
-# that pooling is hiding a compositional difference, and the interaction
-# p-values in ord_summary say whether it matters for the outcome.
+# that pooling is hiding a compositional difference.
 demo_crosstabs <- purrr::map(demo_specs[names(demo_specs) != "career_stage"],
                              function(spec) {
   d <- prep_demo(survey, spec) %>%
@@ -2316,6 +2916,199 @@ purrr::iwalk(demo_crosstabs, function(z, nm) {
 
 # for gender, we have differences by career stage
 # rest are pretty even
+
+
+# =================================================================
+# 8. ASSOCIATIONS AMONG ALL THE DEMOGRAPHIC PREDICTORS
+# =================================================================
+# Section 7 only crosses each demographic with career stage; this covers
+# every pair. Spearman is a poor fit here: with 3-5 categories its
+# attainable maximum is well below 1 and depends on the margins, so values
+# are not comparable across pairs, and gender / work sector are unordered.
+#
+#   ordinal x ordinal -> POLYCHORIC correlation (two-step, polycor). The
+#                        correlation of the latent normal variables behind
+#                        the two ordered responses - the same latent model
+#                        as the cumulative probit fits above. Ties are not
+#                        an issue: it is estimated from the contingency
+#                        table. The two-step estimator is used because full
+#                        ML (ML = TRUE) fails more readily on sparse tables.
+#   nominal x any     -> BIAS-CORRECTED Cramer's V, effectsize::cramers_v()
+#                        with adjust = TRUE (Bergsma 2013, J Korean Stat Soc
+#                        42:323-328, doi:10.1016/j.jkss.2012.10.002). Plain V
+#                        is biased upward in small / sparse tables.
+#
+# "ordinal" / "nominal" is read from demo_specs$type, and each variable
+# loses the same `drop` levels it loses in the models. Every pair then uses
+# its own complete cases, so n differs by pair (reported in the table).
+
+assoc_specs <- demo_specs
+assoc_kind  <- vapply(assoc_specs, function(s)
+  if (s$type == "count") "ordinal" else "nominal", character(1))
+
+# one column per demographic, dropped levels set to NA (not removed rows,
+# which would make every pair lose every other variable's exclusions)
+assoc_dat <- purrr::map_dfc(assoc_specs, function(s) {
+  v <- survey[[s$var]]
+  v[v %in% s$drop] <- NA
+  if (s$type == "count")
+    factor(v, levels = sort(unique(v[!is.na(v)])), ordered = TRUE)
+  else
+    droplevels(factor(v))
+})
+
+# ---- the two measures ----------------------------------------------
+# both return one row in the same shape, so the pairs bind together
+assoc_polychoric <- function(x, y) {
+  ok <- !is.na(x) & !is.na(y)
+  x  <- droplevels(x[ok]); y <- droplevels(y[ok])
+  r  <- polycor::polychor(x, y, std.err = TRUE)
+  se <- sqrt(r$var[1, 1])
+  tibble::tibble(
+    measure  = "polychoric", estimate = r$rho, se = se,
+    # Wald 95% CI, clipped to the possible range
+    ci_low   = max(-1, r$rho - stats::qnorm(.975) * se),
+    ci_high  = min( 1, r$rho + stats::qnorm(.975) * se),
+    # Wald test of rho = 0
+    p_value  = 2 * stats::pnorm(-abs(r$rho / se)), n = r$n,
+    # test of bivariate normality of the latent pair; a small p says the
+    # latent-normal model behind rho is doubtful for this pair
+    normality_p = if (r$df > 0)
+      stats::pchisq(r$chisq, r$df, lower.tail = FALSE) else NA_real_)
+}
+
+assoc_cramers_v <- function(x, y, B = 1e4) {
+  tab <- table(x, y)                               # NA pairs excluded
+  tab <- tab[rowSums(tab) > 0, colSums(tab) > 0, drop = FALSE]
+  # two-sided CI: the default ("greater") fixes the upper bound at 1
+  v <- as.data.frame(effectsize::cramers_v(tab, adjust = TRUE, ci = 0.95,
+                                           alternative = "two.sided"))
+  tibble::tibble(
+    measure  = "cramers_v_bc",
+    estimate = v$Cramers_v_adjusted, se = NA_real_,
+    ci_low   = v$CI_low, ci_high = v$CI_high,
+    # simulated p, as in section 7: many expected counts are < 5
+    p_value  = stats::chisq.test(tab, simulate.p.value = TRUE, B = B)$p.value,
+    n = as.integer(sum(tab)), normality_p = NA_real_)
+}
+
+# ---- every pair ----------------------------------------------------
+assoc_pairs <- as.data.frame(t(utils::combn(names(assoc_specs), 2)),
+                             stringsAsFactors = FALSE) %>%
+  stats::setNames(c("var1", "var2"))
+
+assoc_tbl <- purrr::pmap_dfr(assoc_pairs, function(var1, var2) {
+  both_ord <- assoc_kind[[var1]] == "ordinal" && assoc_kind[[var2]] == "ordinal"
+  res <- tryCatch(
+    if (both_ord) assoc_polychoric(assoc_dat[[var1]], assoc_dat[[var2]])
+    else          assoc_cramers_v(assoc_dat[[var1]], assoc_dat[[var2]]),
+    error = function(e) tibble::tibble(
+      measure = if (both_ord) "polychoric" else "cramers_v_bc",
+      error = conditionMessage(e)))
+  dplyr::bind_cols(tibble::tibble(var1 = var1, var2 = var2), res)
+})
+if (!"error" %in% names(assoc_tbl)) assoc_tbl$error <- NA_character_
+assoc_tbl$set <- "demographics"
+
+# ---- gen_attitude x AI use frequency --------------------------------
+# Both are OUTCOMES, so this pair is not modelled as y ~ x in section 6
+# (the direction cannot be identified); it is reported here as a
+# correlation, in both gen_attitude versions. In the table only - the
+# heatmaps stay demographics x demographics.
+ga_versions <- list(
+  gen_attitude     = droplevels(factor(
+    ifelse(survey$gen_attitude %in% c("Other", "Indifferent"), NA,
+           as.character(survey$gen_attitude)),
+    levels = levels(survey$gen_attitude), ordered = TRUE)),
+  gen_attitude_mix = survey$gen_attitude_mix)
+
+assoc_ga <- purrr::imap_dfr(ga_versions, function(g, nm)
+  dplyr::bind_cols(
+    tibble::tibble(var1 = nm, var2 = "ai_use_freq"),
+    assoc_polychoric(g, assoc_dat$ai_use_freq),
+    tibble::tibble(error = NA_character_, set = "outcome pair")))
+
+assoc_tbl <- dplyr::bind_rows(assoc_tbl, assoc_ga)
+
+print(as.data.frame(dplyr::mutate(assoc_tbl,
+        dplyr::across(c(estimate, se, p_value, normality_p), ~ round(.x, 3)))),
+      row.names = FALSE)
+
+readr::write_csv(assoc_tbl, file.path(fig_path, "demographic_associations.csv"))
+
+# ---- heatmaps ------------------------------------------------------
+# Two panels, not one: rho is SIGNED (-1..1, diverging scale with a grey
+# zero) and V is a MAGNITUDE (0..1, one-hue sequential scale). Sharing a
+# colour scale would make V = 0.3 look like rho = 0.3.
+assoc_label <- vapply(assoc_specs, `[[`, character(1), "label")
+
+assoc_long <- assoc_tbl %>%
+  dplyr::filter(is.na(error), set == "demographics") %>%
+  dplyr::mutate(lab = sprintf("%.2f\nn = %d", estimate, n),
+                # ink flips to the light surface on the darkest fills
+                ink = ifelse(abs(estimate) > .6, "#fcfcfb", "#0b0b0b"))
+
+# polychoric: lower triangle, in demo_specs order
+ord_names <- names(assoc_kind)[assoc_kind == "ordinal"]
+poly_plot_dat <- assoc_long %>%
+  dplyr::filter(measure == "polychoric") %>%
+  dplyr::mutate(
+    # put the later variable in demo_specs order on the rows
+    row = factor(assoc_label[var2], levels = rev(assoc_label[ord_names])),
+    col = factor(assoc_label[var1], levels = assoc_label[ord_names]))
+
+p_poly <- ggplot2::ggplot(poly_plot_dat, ggplot2::aes(col, row, fill = estimate)) +
+  ggplot2::geom_tile(colour = "#fcfcfb", linewidth = 1) +
+  ggplot2::geom_text(ggplot2::aes(label = lab, colour = ink), size = 3) +
+  ggplot2::scale_colour_identity() +
+  ggplot2::scale_fill_gradient2(low = "#e34948", mid = "#f0efec",
+                                high = "#1c5cab", midpoint = 0,
+                                limits = c(-1, 1), name = "polychoric\nrho") +
+  ggplot2::scale_x_discrete(labels = scales::label_wrap(12)) +
+  ggplot2::scale_y_discrete(labels = scales::label_wrap(16)) +
+  ggplot2::labs(x = NULL, y = NULL,
+                title = "Ordinal x ordinal demographics",
+                caption = "two-step polychoric correlation; pairwise complete cases") +
+  ggplot2::coord_equal() +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(panel.grid = ggplot2::element_blank())
+
+ggsave(file.path(fig_path, "demographic_assoc_polychoric.jpg"), p_poly,
+       width = 7, height = 6)
+
+# Cramer's V: each nominal variable (rows) against every other variable
+nom_names <- names(assoc_kind)[assoc_kind == "nominal"]
+cv_plot_dat <- assoc_long %>%
+  dplyr::filter(measure == "cramers_v_bc") %>%
+  # orient each pair so the nominal variable is the row; a nominal x
+  # nominal pair is shown once, in combn() order
+  dplyr::mutate(
+    flip = !var1 %in% nom_names,
+    row_var = ifelse(flip, var2, var1),
+    col_var = ifelse(flip, var1, var2),
+    row = factor(assoc_label[row_var], levels = rev(assoc_label[nom_names])),
+    col = factor(assoc_label[col_var],
+                 levels = assoc_label[names(assoc_specs)]),
+    ink = ifelse(estimate > .6, "#fcfcfb", "#0b0b0b")) %>%
+  droplevels()
+
+p_cv <- ggplot2::ggplot(cv_plot_dat, ggplot2::aes(col, row, fill = estimate)) +
+  ggplot2::geom_tile(colour = "#fcfcfb", linewidth = 1) +
+  ggplot2::geom_text(ggplot2::aes(label = lab, colour = ink), size = 3) +
+  ggplot2::scale_colour_identity() +
+  ggplot2::scale_fill_gradient(low = "#cde2fb", high = "#104281",
+                               limits = c(0, 1), name = "Cramer's V\n(bias-corr.)") +
+  ggplot2::scale_x_discrete(labels = scales::label_wrap(12)) +
+  ggplot2::scale_y_discrete(labels = scales::label_wrap(16)) +
+  ggplot2::labs(x = NULL, y = NULL,
+                title = "Nominal demographics x every other demographic",
+                caption = "bias-corrected Cramer's V (Bergsma 2013); pairwise complete cases") +
+  ggplot2::coord_equal() +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(panel.grid = ggplot2::element_blank())
+
+ggsave(file.path(fig_path, "demographic_assoc_cramersv.jpg"), p_cv,
+       width = 9, height = 3.5)
 
 # -------------------------------------------------
 # Session info for the methods section
