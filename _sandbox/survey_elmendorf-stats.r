@@ -3066,10 +3066,13 @@ assoc_long <- assoc_tbl %>%
                 # ink flips to the light surface on the darkest fills
                 ink = ifelse(abs(estimate) > .6, "#fcfcfb", "#0b0b0b"))
 
-# polychoric: lower triangle, in demo_specs order
-ord_names <- names(assoc_kind)[assoc_kind == "ordinal"]
+# polychoric: lower triangle, in demo_specs order. AI use frequency is left
+# out of the figure because it is an outcome here, not a demographic; its
+# correlations stay in demographic_associations.csv.
+ord_names <- setdiff(names(assoc_kind)[assoc_kind == "ordinal"], "ai_use_freq")
 poly_plot_dat <- assoc_long %>%
-  dplyr::filter(measure == "polychoric") %>%
+  dplyr::filter(measure == "polychoric",
+                var1 %in% ord_names, var2 %in% ord_names) %>%
   dplyr::mutate(
     # put the later variable in demo_specs order on the rows
     row = factor(assoc_label[var2], levels = rev(assoc_label[ord_names])),
@@ -3094,10 +3097,12 @@ p_poly <- ggplot2::ggplot(poly_plot_dat, ggplot2::aes(col, row, fill = estimate)
 ggsave(file.path(fig_path, "demographic_assoc_polychoric.jpg"), p_poly,
        width = 7, height = 6)
 
-# Cramer's V: each nominal variable (rows) against every other variable
+# Cramer's V: each nominal variable (rows) against every other variable,
+# again without AI use frequency (see above)
 nom_names <- names(assoc_kind)[assoc_kind == "nominal"]
 cv_plot_dat <- assoc_long %>%
-  dplyr::filter(measure == "cramers_v_bc") %>%
+  dplyr::filter(measure == "cramers_v_bc",
+                var1 != "ai_use_freq", var2 != "ai_use_freq") %>%
   # orient each pair so the nominal variable is the row; a nominal x
   # nominal pair is shown once, in combn() order
   dplyr::mutate(

@@ -163,6 +163,9 @@ unadjusted models.
   bias-corrected Cramér's V (`effectsize::cramers_v(adjust = TRUE)`; Bergsma
   2013), with simulated χ² p-values.
 
+Both heatmaps leave out AI use frequency because it is an outcome here; its
+associations with the demographics are in `demographic_associations.csv`.
+
 Section 7 also prints cross-tabs of each demographic against career stage to
 the console (not saved).
 
@@ -212,8 +215,8 @@ graphs/
     │   ── exclusions and associations ─────────────────────────────────────
     ├── exclusions.csv                     every exclusion rule with its n
     ├── demographic_associations.csv       every demographic pair + attitude x AI use
-    ├── demographic_assoc_polychoric.jpg   heatmap: ordinal x ordinal demographics
-    └── demographic_assoc_cramersv.jpg     heatmap: nominal x every other demographic
+    ├── demographic_assoc_polychoric.jpg   heatmap: ordinal x ordinal demographics, without AI use frequency
+    └── demographic_assoc_cramersv.jpg     heatmap: nominal x every other demographic, without AI use frequency
 
 fits_ordinal/                              cached select-all fits (read when rerun_mods = FALSE)
 ├── res_<sa>_by_<demo>_subj.rds            main fit_select_all() result, one per cell (13)
